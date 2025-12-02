@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(timeout 60 python debug_date_click.py)",
+      "Bash(timeout 60 python debug/debug_extract_data.py)",
+      "Bash(timeout 60 python debug/debug_only_button.py)",
+      "Bash(timeout:*)",
+      "Bash(pip install:*)",
+      "Bash(del QUICKSTART.md)",
+      "Bash(dir:*)",
+      "Bash(mkdir:*)",
+      "Bash(test:*)",
+      "Bash(move:*)",
+      "Bash(move screenshots notneeded )",
+      "Bash(move chrome_profile notneeded )",
+      "Bash(move credentials notneeded )",
+      "Bash(move venv notneeded )",
+      "Bash(mv:*)",
+      "Bash(nul)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

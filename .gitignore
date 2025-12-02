@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Google Sheets credentials
+auth.json
+credentials.json
+token.json
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Screenshots and reports
+screenshots/
+reports/
+
+# Project-specific exclusions
+notneeded/
+nul
+chrome_profile/
+logsforCodex.txt
+tableForXodexToReview.txt
+
+# JSON report outputs
+order_type_report_*.json

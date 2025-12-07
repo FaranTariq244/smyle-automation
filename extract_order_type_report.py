@@ -804,6 +804,143 @@ def extract_klaviyo_metrics(driver, parse_number_func):
         }
 
 
+def extract_conversion_rate(driver, date_obj, parse_number_func):
+    """Extract Conversion Rate from Converge attribution blended page."""
+    print("\nExtracting Conversion Rate from Converge...")
+
+    try:
+        # Build the Converge URL with date parameters
+        date_str_url = date_obj.strftime('%Y-%m-%d')  # Format: 2025-12-01
+
+        # Use query parameters as shown in user's URL
+        CONVERGE_URL = f"https://app.runconverge.com/smyle-7267/attribution?date_range={{%22since%22:%22{date_str_url}%22,%22until%22:%22{date_str_url}%22}}"
+
+        print(f"Navigating to Converge Blended Analytics...")
+        print(f"URL: {CONVERGE_URL}")
+        driver.get(CONVERGE_URL)
+        time.sleep(5)
+
+        # Check if login needed for Converge
+        if "login" in driver.current_url.lower() or "sign" in driver.current_url.lower():
+            print("\n  Please login to Converge in the browser window...")
+            print("Waiting for login...")
+            while "login" in driver.current_url.lower() or "sign" in driver.current_url.lower():
+                time.sleep(2)
+            print(" Login successful")
+
+        # IMPORTANT: Open URL twice to ensure fresh data (as mentioned by user)
+        print("Loading page first time...")
+        driver.get(CONVERGE_URL)
+        time.sleep(5)
+
+        print("Reloading page to get fresh data...")
+        driver.get(CONVERGE_URL)
+        time.sleep(8)  # Wait longer for data to fully load
+
+        print("Looking for Conversion Rate metric...")
+
+        # Method 1: Try to find "Conversion Rate" text and extract nearby value
+        conversion_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Conversion Rate')]")
+
+        for elem in conversion_elements:
+            try:
+                if elem.is_displayed():
+                    print(f"Found 'Conversion Rate' label")
+
+                    # Get the parent container
+                    parent = elem.find_element(By.XPATH, "./ancestor::div[contains(@class, 'metric') or contains(@class, 'card') or contains(@class, 'stat')][1] | ./parent::*")
+
+                    # Get all text from parent
+                    parent_text = parent.text.strip()
+                    lines = parent_text.split('\n')
+
+                    print(f"Metric card text: {lines}")
+
+                    # Find the percentage value
+                    for i, line in enumerate(lines):
+                        if 'Conversion Rate' in line:
+                            # Check next line for value
+                            if i + 1 < len(lines):
+                                value_text = lines[i + 1]
+                                # Check if it looks like a percentage
+                                if '%' in value_text or any(char.isdigit() for char in value_text):
+                                    conversion_rate = parse_number_func(value_text)
+                                    print(f" Found Conversion Rate: {value_text} = {conversion_rate}%")
+                                    return conversion_rate
+
+                            # Sometimes value is on same line
+                            if any(char.isdigit() for char in line):
+                                # Extract number from the same line
+                                match = re.search(r'(\d+\.?\d*)%?', line)
+                                if match:
+                                    value_text = match.group(1)
+                                    conversion_rate = parse_number_func(value_text)
+                                    print(f" Found Conversion Rate: {value_text}% = {conversion_rate}%")
+                                    return conversion_rate
+            except Exception as e:
+                print(f"  Error processing element: {e}")
+                continue
+
+        # Method 2: Use JavaScript to find the conversion rate
+        print("Trying JavaScript extraction...")
+        script = """
+            let allElements = document.querySelectorAll('*');
+            let conversionLabel = null;
+            let conversionValue = null;
+
+            // Find "Conversion Rate" label
+            for (let el of allElements) {
+                let text = el.textContent.trim();
+
+                // Check if this element contains "Conversion Rate" but not much else
+                if (text.includes('Conversion Rate') && text.length < 50) {
+                    conversionLabel = {text: text};
+
+                    // Look for percentage value near this label
+                    let parent = el.parentElement;
+                    if (parent) {
+                        let parentText = parent.textContent;
+                        let percentMatch = parentText.match(/(\d+\.?\d*)\s*%/);
+                        if (percentMatch) {
+                            conversionValue = percentMatch[1];
+                            break;
+                        }
+                    }
+
+                    // Check siblings
+                    let nextSib = el.nextElementSibling;
+                    if (nextSib) {
+                        let sibText = nextSib.textContent;
+                        let percentMatch = sibText.match(/(\d+\.?\d*)\s*%/);
+                        if (percentMatch) {
+                            conversionValue = percentMatch[1];
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return {label: conversionLabel, value: conversionValue};
+        """
+
+        result = driver.execute_script(script)
+
+        if result and result.get('value'):
+            value_text = result['value']
+            conversion_rate = parse_number_func(value_text)
+            print(f" Found Conversion Rate via JavaScript: {value_text}% = {conversion_rate}%")
+            return conversion_rate
+
+        print(" Could not find Conversion Rate metric")
+        return 0.0
+
+    except Exception as e:
+        print(f"Error extracting Conversion Rate: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0.0
+
+
 def main():
     """Main execution."""
     ORDER_TYPE_URL = "https://lookerstudio.google.com/u/0/reporting/ddcef9f1-b6d4-4ed3-86e3-38c70a521a2c/page/h0vQC"
@@ -821,7 +958,8 @@ def main():
         'date': date_str,
         'order_type_metrics': {},
         'marketing_spend': 0.0,
-        'klaviyo_metrics': {}
+        'klaviyo_metrics': {},
+        'conversion_rate': 0.0
     }
 
     # ============================================================================
@@ -833,11 +971,11 @@ def main():
     print("STEP 1: ORDER TYPE REPORT".center(80))
     print("="*80)
 
-    print("\n[1/10] Opening browser...")
+    print("\n[1/11] Opening browser...")
     manager = BrowserManager(use_existing_chrome=False)
     driver = manager.start_browser()
 
-    print("[2/10] Navigating to Order Type report...")
+    print("[2/11] Navigating to Order Type report...")
     driver.get(ORDER_TYPE_URL)
     time.sleep(5)
 
@@ -852,10 +990,10 @@ def main():
 
     try:
         # Extract Order Type data
-        print("[3/10] Setting date range...")
+        print("[3/11] Setting date range...")
         extractor.set_date_range(date_obj, date_obj)
 
-        print("[4/10] Extracting Order Type data...")
+        print("[4/11] Extracting Order Type data...")
         order_type_metrics = extractor.extract_order_type_metrics()
         extracted_data['order_type_metrics'] = order_type_metrics
 
@@ -870,14 +1008,14 @@ def main():
         print("STEP 2: MARKETING DEEPDIVE - SPEND".center(80))
         print("="*80)
 
-        print("\n[5/10] Navigating to Marketing Deepdive page...")
+        print("\n[5/11] Navigating to Marketing Deepdive page...")
         driver.get(MARKETING_URL)
         time.sleep(5)
 
-        print("[6/10] Setting date range...")
+        print("[6/11] Setting date range...")
         extractor.set_date_range(date_obj, date_obj)
 
-        print("[7/10] Extracting Marketing Spend...")
+        print("[7/11] Extracting Marketing Spend...")
         marketing_spend = extract_marketing_spend(extractor, date_obj)
         extracted_data['marketing_spend'] = marketing_spend
 
@@ -895,7 +1033,7 @@ def main():
         date_str_url = date_obj.strftime('%Y-%m-%d')  # Format: 2025-10-14
         CONVERGE_URL = f"https://app.runconverge.com/smyle-7267/attribution/channels#since={date_str_url}&until={date_str_url}"
 
-        print(f"\n[8/10] Navigating to Converge Attribution page...")
+        print(f"\n[8/11] Navigating to Converge Attribution page...")
         print(f"URL: {CONVERGE_URL}")
         driver.get(CONVERGE_URL)
         time.sleep(5)
@@ -910,7 +1048,7 @@ def main():
             print(" Login successful")
 
         # IMPORTANT: Open URL twice to get correct data
-        print("[9/10] Loading page first time...")
+        print("[9/11] Loading page first time...")
         driver.get(CONVERGE_URL)
         time.sleep(5)
 
@@ -918,9 +1056,23 @@ def main():
         driver.get(CONVERGE_URL)
         time.sleep(8)  # Wait longer for data to fully load
 
-        print("[10/10] Extracting Klaviyo metrics...")
+        print("[10/11] Extracting Klaviyo metrics...")
         klaviyo_metrics = extract_klaviyo_metrics(driver, extractor.parse_number)
         extracted_data['klaviyo_metrics'] = klaviyo_metrics
+
+        # ============================================================================
+        # STEP 4: CONVERGE BLENDED ANALYTICS - CONVERSION RATE
+        # ============================================================================
+
+        print("\n" + "="*80)
+        print("STEP 4: CONVERGE BLENDED ANALYTICS - CONVERSION RATE".center(80))
+        print("="*80)
+
+        print("\n[11/11] Extracting Conversion Rate...")
+        conversion_rate = extract_conversion_rate(driver, date_obj, extractor.parse_number)
+        extracted_data['conversion_rate'] = conversion_rate
+
+        print(f"\n Conversion Rate: {conversion_rate}%")
 
         # ============================================================================
         # FINAL RESULTS SUMMARY
@@ -950,6 +1102,9 @@ def main():
         print(f"   Revenue: {klaviyo_metrics.get('revenue', 0):,.2f}")
         print(f"   NC Revenue: {klaviyo_metrics.get('nc_revenue', 0):,.2f}")
 
+        print(f"\nCONVERSION RATE:")
+        print(f"   Conversion Rate: {conversion_rate}%")
+
         print("\n" + "="*80)
 
         # ============================================================================
@@ -971,7 +1126,8 @@ def main():
                 date_obj,
                 order_type_metrics,
                 marketing_spend,
-                klaviyo_metrics
+                klaviyo_metrics,
+                conversion_rate
             )
 
         except Exception as e:

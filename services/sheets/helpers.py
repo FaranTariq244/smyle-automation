@@ -149,9 +149,9 @@ def get_order_type_worksheet():
     return worksheet
 
 
-def write_order_type_data(date_obj, order_type_metrics: Dict, marketing_spend: float, klaviyo_metrics: Dict):
+def write_order_type_data(date_obj, order_type_metrics: Dict, marketing_spend: float, klaviyo_metrics: Dict, conversion_rate: float = 0.0):
     """
-    Write Order Type, Marketing Spend, and Klaviyo data to Google Sheets.
+    Write Order Type, Marketing Spend, Klaviyo data, and Conversion Rate to Google Sheets.
 
     This function:
     1. Finds the row matching the date (searches column with date values)
@@ -165,6 +165,7 @@ def write_order_type_data(date_obj, order_type_metrics: Dict, marketing_spend: f
         marketing_spend: Float value for marketing spend
         klaviyo_metrics: Dictionary with Klaviyo data
             Expected keys: purchases, nc, revenue, nc_revenue
+        conversion_rate: Float value for conversion rate from Converge (default: 0.0)
 
     Column Mapping (Column O):
         O8  = first_subscription > Net Revenue (0 if empty)
@@ -178,6 +179,7 @@ def write_order_type_data(date_obj, order_type_metrics: Dict, marketing_spend: f
         O33 = Marketing Spend
         O46 = Klaviyo Purchases - NC
         O47 = (Klaviyo Revenue - NC Revenue) / 1.21
+        O81 = Conversion Rate from Converge
     """
     try:
         ws = get_order_type_worksheet()
@@ -314,6 +316,15 @@ def write_order_type_data(date_obj, order_type_metrics: Dict, marketing_spend: f
             'values': [[klaviyo_calc]]
         })
 
+        # O81 = Conversion Rate from Converge
+        # Divide by 100 because the cell is formatted as percentage in Google Sheets
+        # So 3.81 becomes 0.0381, which displays as 3.81% in a percentage-formatted cell
+        conversion_rate_decimal = conversion_rate / 100 if conversion_rate != 0 else 0
+        updates.append({
+            'range': f'{col_letter}81',
+            'values': [[conversion_rate_decimal]]
+        })
+
         # Execute batch update
         ws.batch_update(updates, value_input_option='USER_ENTERED')
 
@@ -327,6 +338,7 @@ def write_order_type_data(date_obj, order_type_metrics: Dict, marketing_spend: f
         print(f"    Marketing Spend: €{marketing_spend:,.2f}")
         print(f"    Klaviyo (Purchases - NC): {klaviyo_diff}")
         print(f"    Klaviyo ((Rev - NC Rev) / 1.21): €{klaviyo_calc:,.2f}")
+        print(f"    Conversion Rate: {conversion_rate}%")
 
     except Exception as e:
         print(f"\n  ✗ Failed to write to Google Sheets: {e}")

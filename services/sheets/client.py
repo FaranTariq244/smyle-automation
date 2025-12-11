@@ -3,10 +3,10 @@ Google Sheets client using service account OAuth flow.
 Handles authentication and worksheet access.
 """
 
-import os
 import json
 import gspread
 from google.oauth2.service_account import Credentials
+from config_store import get_setting
 
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
@@ -37,7 +37,7 @@ def get_worksheet():
     """
     Get the Google Sheets worksheet to work with.
 
-    Uses environment variables:
+    Uses locally stored settings (config.db):
     - SPREAD_SHEET_NAME: Name of the spreadsheet
     - WORK_SHEET_NAME: Name of the worksheet within the spreadsheet
 
@@ -49,8 +49,8 @@ def get_worksheet():
     """
     creds = get_credentials()
     gc = gspread.authorize(creds)
-    ss_name = os.getenv("SPREAD_SHEET_NAME")
-    ws_name = os.getenv("WORK_SHEET_NAME")
+    ss_name = get_setting("SPREAD_SHEET_NAME")
+    ws_name = get_setting("WORK_SHEET_NAME")
     assert ss_name and ws_name, "Missing SPREAD_SHEET_NAME or WORK_SHEET_NAME."
     ss = gc.open(ss_name)
     return ss.worksheet(ws_name)

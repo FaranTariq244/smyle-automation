@@ -6,9 +6,9 @@ These helpers convert your extracted data into the correct format for the sheets
 from typing import Dict
 from datetime import datetime
 from services.sheets.io import append_rows
-import os
 import gspread
 from google.oauth2.service_account import Credentials
+from config_store import get_setting
 
 
 def write_marketing_data(date_obj, overall_data: Dict, facebook_data: Dict, google_data: Dict):
@@ -91,9 +91,9 @@ def write_marketing_data(date_obj, overall_data: Dict, facebook_data: Dict, goog
 def get_order_type_worksheet():
     """
     Get the Order Type Google Sheets worksheet.
-    Reads full Google Sheets URL from environment variable and extracts IDs automatically.
+    Reads full Google Sheets URL from the local config store and extracts IDs automatically.
 
-    Environment variables required:
+    Stored value required:
         ORDER_TYPE_SHEET_URL - Full Google Sheets URL
             Example: https://docs.google.com/spreadsheets/d/1d8KEO_R3PUsEdnTvt1MmSrYd0MbHxPIQOt1hv0m0zVs/edit?gid=1449465974
 
@@ -120,11 +120,11 @@ def get_order_type_worksheet():
     # Authorize and open the specific spreadsheet by ID
     gc = gspread.authorize(creds)
 
-    # Get full URL from environment variable
-    sheet_url = os.getenv("ORDER_TYPE_SHEET_URL")
+    # Get full URL from local config
+    sheet_url = get_setting("ORDER_TYPE_SHEET_URL")
 
     if not sheet_url:
-        raise ValueError("ORDER_TYPE_SHEET_URL environment variable is not set. Please add it to .env file.")
+        raise ValueError("ORDER_TYPE_SHEET_URL is not set. Please add it via the GUI settings or config.db.")
 
     # Parse spreadsheet ID from URL
     # Pattern: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit...

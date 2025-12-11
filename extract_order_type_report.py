@@ -815,7 +815,7 @@ def extract_conversion_rate(driver, date_obj, parse_number_func):
         # Use query parameters as shown in user's URL
         CONVERGE_URL = f"https://app.runconverge.com/smyle-7267/attribution?date_range={{%22since%22:%22{date_str_url}%22,%22until%22:%22{date_str_url}%22}}"
 
-        print(f"Navigating to Converge Blended Analytics...")
+        print(f"Navigating to Converge Blended Analytics.***..")
         print(f"URL: {CONVERGE_URL}")
         driver.get(CONVERGE_URL)
         time.sleep(5)

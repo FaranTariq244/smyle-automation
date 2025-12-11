@@ -155,11 +155,11 @@ def run_order_type_report(date_obj, date_str):
         ORDER_TYPE_URL = "https://lookerstudio.google.com/u/0/reporting/ddcef9f1-b6d4-4ed3-86e3-38c70a521a2c/page/h0vQC"
         MARKETING_URL = "https://lookerstudio.google.com/u/0/reporting/ddcef9f1-b6d4-4ed3-86e3-38c70a521a2c/page/M05qB"
 
-        print("[1/10] Opening browser...")
+        print("[1/11] Opening browser...")
         manager = BrowserManager(use_existing_chrome=False)
         driver = manager.start_browser()
 
-        print("[2/10] Navigating to Order Type report...")
+        print("[2/11] Navigating to Order Type report...")
         driver.get(ORDER_TYPE_URL)
         time.sleep(5)
 
@@ -173,28 +173,28 @@ def run_order_type_report(date_obj, date_str):
         extractor = order_script.OrderTypeDataExtractor(driver)
 
         # Extract Order Type data
-        print("[3/10] Setting date range...")
+        print("[3/11] Setting date range...")
         extractor.set_date_range(date_obj, date_obj)
 
-        print("[4/10] Extracting Order Type data...")
+        print("[4/11] Extracting Order Type data...")
         order_type_metrics = extractor.extract_order_type_metrics()
 
         # Navigate to Marketing page
-        print("\n[5/10] Navigating to Marketing Deepdive page...")
+        print("\n[5/11] Navigating to Marketing Deepdive page...")
         driver.get(MARKETING_URL)
         time.sleep(5)
 
-        print("[6/10] Setting date range...")
+        print("[6/11] Setting date range...")
         extractor.set_date_range(date_obj, date_obj)
 
-        print("[7/10] Extracting Marketing Spend...")
+        print("[7/11] Extracting Marketing Spend...")
         marketing_spend = order_script.extract_marketing_spend(extractor, date_obj)
 
         # Navigate to Converge
         date_str_url = date_obj.strftime('%Y-%m-%d')
         CONVERGE_URL = f"https://app.runconverge.com/smyle-7267/attribution/channels#since={date_str_url}&until={date_str_url}"
 
-        print(f"\n[8/10] Navigating to Converge Attribution page...")
+        print(f"\n[8/11] Navigating to Converge Attribution page...")
         driver.get(CONVERGE_URL)
         time.sleep(5)
 
@@ -206,7 +206,7 @@ def run_order_type_report(date_obj, date_str):
             print("✓ Login successful")
 
         # Reload page twice
-        print("[9/10] Loading page first time...")
+        print("[9/11] Loading page first time...")
         driver.get(CONVERGE_URL)
         time.sleep(5)
 
@@ -214,8 +214,12 @@ def run_order_type_report(date_obj, date_str):
         driver.get(CONVERGE_URL)
         time.sleep(8)
 
-        print("[10/10] Extracting Klaviyo metrics...")
+        print("[10/11] Extracting Klaviyo metrics...")
         klaviyo_metrics = order_script.extract_klaviyo_metrics(driver, extractor.parse_number)
+
+        # Extract conversion rate from Converge blended analytics
+        print("\n[11/11] Extracting Conversion Rate...")
+        conversion_rate = order_script.extract_conversion_rate(driver, date_obj, extractor.parse_number)
 
         # Display results
         print("\n" + "="*80)
@@ -224,10 +228,11 @@ def run_order_type_report(date_obj, date_str):
         print(f"\nOrder Types: {len(order_type_metrics)} extracted")
         print(f"Marketing Spend: €{marketing_spend:,.2f}")
         print(f"Klaviyo Purchases: {klaviyo_metrics.get('purchases', 0)}")
+        print(f"Conversion Rate: {conversion_rate}%")
 
         # Save to Google Sheets
         print("\nSaving to Google Sheets...")
-        write_order_type_data(date_obj, order_type_metrics, marketing_spend, klaviyo_metrics)
+        write_order_type_data(date_obj, order_type_metrics, marketing_spend, klaviyo_metrics, conversion_rate)
 
         # Close browser
         manager.close()

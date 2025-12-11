@@ -3,6 +3,7 @@ Helper functions for writing marketing data to Google Sheets.
 These helpers convert your extracted data into the correct format for the sheets.
 """
 
+import os
 from typing import Dict
 from datetime import datetime
 from services.sheets.io import append_rows

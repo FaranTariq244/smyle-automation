@@ -2,7 +2,7 @@
 Google Sheets client using service account OAuth flow.
 Handles authentication and worksheet access.
 """
-
+import os
 import json
 import gspread
 from google.oauth2.service_account import Credentials

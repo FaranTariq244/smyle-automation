@@ -32,6 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 # Import existing business logic
 from run_all_reports import run_daily_report, run_order_type_report  # noqa: E402
 from config_store import get_settings, set_settings  # noqa: E402
+from scheduler import RECURRENCE_CHOICES, ScheduleStore, SchedulerService  # noqa: E402
 
 
 class OutputRedirector:
@@ -77,6 +78,17 @@ class AutomationApp:
             "ORDER_TYPE_SHEET_URL",
         ]
         self.settings_vars = {key: tk.StringVar() for key in self.settings_keys}
+        self.schedule_enabled_var = tk.BooleanVar(value=True)
+        self.schedule_recurrence_var = tk.StringVar(value="daily")
+        self.schedule_time_var = tk.StringVar(value="07:00")
+        self.schedule_start_var = tk.StringVar(
+            value=datetime.now().strftime("%Y-%m-%d")
+        )
+        self.schedule_task_var = tk.StringVar(value="all")
+        self.schedule_days_ago_var = tk.IntVar(value=1)
+        self.schedule_next_run_var = tk.StringVar(value="Not scheduled")
+        self.schedule_last_status_var = tk.StringVar(value="No runs yet")
+        self.schedule_last_log_var = tk.StringVar(value="")
 
         self.message_queue: queue.Queue[str] = queue.Queue()
         self.running = False
@@ -87,12 +99,21 @@ class AutomationApp:
         self.stop_requested = False
         self.current_task: str | None = None
         self.current_date_str: str = ""
+        self.current_run_origin: str = "manual"
+        self.current_schedule_id: int | None = None
+        self.current_log_path: Path | None = None
+        self.last_log_path: Path | None = None
         self._completion_in_progress = False
         self.pages: dict[str, ttk.Frame] = {}
+        self.scheduler_store = ScheduleStore()
+        self.scheduler_service: SchedulerService | None = None
+        self.log_dir = PROJECT_ROOT / "logs"
+        self.log_dir.mkdir(exist_ok=True)
 
         self._create_styles()
         self._build_layout()
         self._load_settings_into_vars()
+        self._init_scheduler()
 
         # Poll log messages regularly
         self.root.after(120, self._drain_queue)
@@ -419,6 +440,117 @@ class AutomationApp:
         )
         self.progress.pack(fill=tk.X)
 
+        # Scheduler card
+        sched_card = ttk.Frame(scroll_frame, style="Card.TFrame")
+        sched_card.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(
+            sched_card, text="Scheduler (auto-runs)", style="CardTitle.TLabel"
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            sched_card,
+            text="Configure automatic runs with hourly/daily/weekly/4-day/monthly cadence.",
+            style="CardText.TLabel",
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 8))
+
+        ttk.Checkbutton(
+            sched_card,
+            text="Enable automatic runs",
+            variable=self.schedule_enabled_var,
+            command=self._save_schedule_settings,
+        ).grid(row=2, column=0, sticky="w", pady=(0, 8))
+
+        ttk.Label(sched_card, text="Recurrence", style="CardText.TLabel").grid(
+            row=3, column=0, sticky="w"
+        )
+        recurrence_combo = ttk.Combobox(
+            sched_card,
+            values=list(RECURRENCE_CHOICES),
+            textvariable=self.schedule_recurrence_var,
+            state="readonly",
+            width=20,
+        )
+        recurrence_combo.grid(row=4, column=0, sticky="we", padx=(0, 8))
+
+        ttk.Label(sched_card, text="Time of day (HH:MM)", style="CardText.TLabel").grid(
+            row=3, column=1, sticky="w"
+        )
+        ttk.Entry(
+            sched_card, width=18, textvariable=self.schedule_time_var, style="Date.TEntry"
+        ).grid(row=4, column=1, sticky="we", padx=(0, 8))
+
+        ttk.Label(sched_card, text="Start date (YYYY-MM-DD)", style="CardText.TLabel").grid(
+            row=3, column=2, sticky="w"
+        )
+        ttk.Entry(
+            sched_card, width=18, textvariable=self.schedule_start_var, style="Date.TEntry"
+        ).grid(row=4, column=2, sticky="we", padx=(0, 8))
+
+        ttk.Label(sched_card, text="Task to run", style="CardText.TLabel").grid(
+            row=5, column=0, sticky="w", pady=(8, 0)
+        )
+        task_combo = ttk.Combobox(
+            sched_card,
+            values=["all", "daily", "order"],
+            textvariable=self.schedule_task_var,
+            state="readonly",
+            width=20,
+        )
+        task_combo.grid(row=6, column=0, sticky="we", padx=(0, 8))
+
+        ttk.Label(
+            sched_card, text="Run data for how many days ago?", style="CardText.TLabel"
+        ).grid(row=5, column=1, sticky="w", pady=(8, 0))
+        tk.Spinbox(
+            sched_card,
+            from_=0,
+            to=30,
+            width=8,
+            textvariable=self.schedule_days_ago_var,
+        ).grid(row=6, column=1, sticky="w", padx=(0, 8))
+
+        ttk.Button(
+            sched_card,
+            text="Save schedule",
+            style="Accent.TButton",
+            command=self._save_schedule_settings,
+        ).grid(row=6, column=2, sticky="we", padx=(0, 8))
+        ttk.Button(
+            sched_card,
+            text="Run now",
+            style="Ghost.TButton",
+            command=self._run_schedule_now,
+        ).grid(row=6, column=3, sticky="we")
+
+        ttk.Label(sched_card, text="Next run", style="CardText.TLabel").grid(
+            row=7, column=0, sticky="w", pady=(10, 0)
+        )
+        ttk.Label(
+            sched_card, textvariable=self.schedule_next_run_var, style="Status.TLabel"
+        ).grid(row=8, column=0, columnspan=2, sticky="w")
+
+        ttk.Label(sched_card, text="Last result", style="CardText.TLabel").grid(
+            row=7, column=1, sticky="w", pady=(10, 0)
+        )
+        ttk.Label(
+            sched_card, textvariable=self.schedule_last_status_var, style="Status.TLabel"
+        ).grid(row=8, column=1, columnspan=2, sticky="w")
+
+        ttk.Label(sched_card, text="Last log file", style="CardText.TLabel").grid(
+            row=7, column=2, sticky="w", pady=(10, 0)
+        )
+        ttk.Label(
+            sched_card, textvariable=self.schedule_last_log_var, style="Status.TLabel"
+        ).grid(row=8, column=2, sticky="w")
+        ttk.Button(
+            sched_card,
+            text="Open log",
+            style="Ghost.TButton",
+            command=self._open_last_log,
+        ).grid(row=8, column=3, sticky="e")
+
+        for col in range(4):
+            sched_card.columnconfigure(col, weight=1)
+
         # Log output area
         log_card = ttk.Frame(scroll_frame, style="Card.TFrame")
         log_card.pack(fill=tk.BOTH, expand=True)
@@ -543,20 +675,33 @@ class AutomationApp:
             return
         date_obj, date_str = parsed
 
+        self.current_schedule_id = None
+        self.current_run_origin = "manual"
+        self._start_task_with_date(task, date_obj, date_str, origin="manual")
+
+    def _start_task_with_date(
+        self, task: str, date_obj: datetime, date_str: str, origin: str
+    ):
         task_name = {
             "all": "All reports",
             "daily": "Daily Report",
             "order": "Order Type Report",
         }.get(task, "Automation")
 
-        self._set_running(True, f"Running {task_name} for {date_str}...")
+        origin_label = "Scheduled run" if origin == "scheduled" else "Manual run"
+        self._set_running(
+            True, f"{origin_label}: Running {task_name} for {date_str}..."
+        )
         self._append_log(
-            f"\n{'=' * 80}\nStarting {task_name} for {date_str}\n{'=' * 80}\n"
+            f"\n{'=' * 80}\n{origin_label} - {task_name} for {date_str}\n{'=' * 80}\n"
         )
         self.stop_requested = False
         self.current_task = task
         self.current_date_str = date_str
+        self.current_run_origin = origin
         self._completion_in_progress = False
+        self.last_log_path = None
+        self.current_log_path = self._start_log_file(task_name, date_str, origin)
         self._launch_subprocess_task(task, date_str)
 
     def _on_task_complete(self, task: str, date_str: str, success: bool):
@@ -578,6 +723,21 @@ class AutomationApp:
         self.current_process = None
         self.current_pid = None
         self.current_task = None
+        success_flag = success and not self.stop_requested
+        if self.current_schedule_id and self.scheduler_service:
+            self.scheduler_service.mark_run_complete(
+                self.current_schedule_id,
+                success_flag,
+                message=status,
+                log_path=str(self.current_log_path) if self.current_log_path else None,
+            )
+            self.root.after(0, self._refresh_schedule_status)
+        self.last_log_path = self.current_log_path
+        if self.last_log_path:
+            self.schedule_last_log_var.set(str(self.last_log_path))
+        self.current_log_path = None
+        self.current_run_origin = "manual"
+        self.current_schedule_id = None
         if not success and not self.stop_requested:
             messagebox.showwarning(
                 "Check the run log",
@@ -609,6 +769,30 @@ class AutomationApp:
         self.log_text.insert(tk.END, message)
         self.log_text.see(tk.END)
         self.log_text.configure(state="disabled")
+        if self.current_log_path:
+            try:
+                with self.current_log_path.open("a", encoding="utf-8") as handle:
+                    handle.write(message)
+            except Exception:
+                # Best-effort logging; UI should not crash if the file is locked
+                pass
+
+    def _start_log_file(self, task_name: str, date_str: str, origin: str) -> Path | None:
+        """Start a log file for the current run so scheduled runs have history."""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_task = task_name.replace(" ", "_").lower()
+            filename = f"{origin}_{safe_task}_{timestamp}.log"
+            path = self.log_dir / filename
+            header = (
+                f"{task_name} for {date_str} ({origin})\n"
+                f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"{'-' * 60}\n"
+            )
+            path.write_text(header, encoding="utf-8")
+            return path
+        except Exception:
+            return None
 
     def _build_subprocess_code(self, task: str, date_str: str) -> str:
         """Build inline Python code for the child process to execute."""
@@ -799,6 +983,194 @@ Get-CimInstance Win32_Process |
         set_settings(payload)
         self.status_var.set("Saved settings to local config.db")
         messagebox.showinfo("Settings saved", "Values stored locally in config.db.")
+
+    # --- Scheduler hooks -------------------------------------------------
+
+    def _init_scheduler(self):
+        """Ensure a default schedule exists and start the background watcher."""
+        schedule = self.scheduler_store.get_by_key("marketing_reports")
+        if not schedule:
+            schedule = self.scheduler_store.upsert_schedule(
+                key="marketing_reports",
+                name="Marketing Reports",
+                task=self.schedule_task_var.get(),
+                recurrence=self.schedule_recurrence_var.get(),
+                time_of_day=self.schedule_time_var.get(),
+                start_date=self.schedule_start_var.get(),
+                run_for_days_ago=self.schedule_days_ago_var.get(),
+                enabled=False,
+            )
+        self._load_schedule_settings(schedule)
+        self.scheduler_service = SchedulerService(
+            self.scheduler_store,
+            on_job_due=self._on_schedule_due,
+            can_start=lambda: not self.running,
+            log=lambda msg: self.message_queue.put(f"[scheduler] {msg}\n"),
+            poll_seconds=30,
+        )
+        self.scheduler_service.start()
+        self.root.after(8000, self._refresh_schedule_status)
+
+    def _load_schedule_settings(self, schedule: dict | None = None):
+        schedule = schedule or self.scheduler_store.get_by_key("marketing_reports")
+        if not schedule:
+            return
+        self.current_schedule_id = schedule.get("id")
+        self.schedule_enabled_var.set(bool(schedule.get("enabled")))
+        self.schedule_recurrence_var.set(schedule.get("recurrence", "daily"))
+        self.schedule_time_var.set(schedule.get("time_of_day", "07:00"))
+        self.schedule_start_var.set(
+            schedule.get("start_date", datetime.now().strftime("%Y-%m-%d"))
+        )
+        self.schedule_task_var.set(schedule.get("task", "all"))
+        self.schedule_days_ago_var.set(int(schedule.get("run_for_days_ago") or 1))
+        self.schedule_next_run_var.set(schedule.get("next_run") or "Not scheduled")
+        last_status = schedule.get("last_status") or "No runs yet"
+        if schedule.get("last_run"):
+            last_status = f"{last_status} at {schedule.get('last_run')}"
+        self.schedule_last_status_var.set(last_status)
+        last_log = schedule.get("last_log_path")
+        if last_log:
+            self.schedule_last_log_var.set(last_log)
+            self.last_log_path = Path(last_log)
+        else:
+            self.schedule_last_log_var.set("")
+            self.last_log_path = None
+
+    def _save_schedule_settings(self):
+        """Persist the scheduler configuration."""
+        time_val = self.schedule_time_var.get().strip() or "07:00"
+        start_val = (
+            self.schedule_start_var.get().strip()
+            or datetime.now().strftime("%Y-%m-%d")
+        )
+        recurrence = self.schedule_recurrence_var.get()
+        task = self.schedule_task_var.get()
+
+        try:
+            datetime.strptime(time_val, "%H:%M")
+        except ValueError:
+            messagebox.showerror(
+                "Invalid time", "Please enter time as HH:MM in 24-hour format."
+            )
+            return
+        try:
+            datetime.strptime(start_val, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showerror(
+                "Invalid start date", "Please enter start date as YYYY-MM-DD."
+            )
+            return
+        if recurrence not in RECURRENCE_CHOICES:
+            messagebox.showerror(
+                "Invalid recurrence",
+                f"Please choose one of: {', '.join(RECURRENCE_CHOICES)}",
+            )
+            return
+
+        try:
+            days_ago = max(0, int(self.schedule_days_ago_var.get()))
+        except Exception:
+            messagebox.showerror(
+                "Invalid offset",
+                "Please enter how many days back to run data for (0 = today, 1 = yesterday).",
+            )
+            return
+        schedule = self.scheduler_store.upsert_schedule(
+            key="marketing_reports",
+            name="Marketing Reports",
+            task=task,
+            recurrence=recurrence,
+            time_of_day=time_val,
+            start_date=start_val,
+            run_for_days_ago=days_ago,
+            enabled=self.schedule_enabled_var.get(),
+        )
+        self.current_schedule_id = schedule.get("id")
+        self.schedule_next_run_var.set(schedule.get("next_run") or "Not scheduled")
+        self.schedule_last_status_var.set(
+            f"Saved. Next run at {schedule.get('next_run', 'n/a')}"
+        )
+        if self.scheduler_service:
+            self.scheduler_service.refresh_next_run(schedule["id"])
+        messagebox.showinfo(
+            "Scheduler saved", "Schedule updated and stored in config.db."
+        )
+
+    def _refresh_schedule_status(self):
+        """Update scheduler status labels from storage."""
+        schedule = self.scheduler_store.get_by_key("marketing_reports")
+        if schedule:
+            self.current_schedule_id = schedule.get("id")
+            self.schedule_next_run_var.set(schedule.get("next_run") or "Not scheduled")
+            last_status = schedule.get("last_status") or "No runs yet"
+            if schedule.get("last_run"):
+                last_status = f"{last_status} at {schedule.get('last_run')}"
+            self.schedule_last_status_var.set(last_status)
+            if schedule.get("last_log_path"):
+                self.schedule_last_log_var.set(schedule["last_log_path"])
+                self.last_log_path = Path(schedule["last_log_path"])
+        self.root.after(10000, self._refresh_schedule_status)
+
+    def _on_schedule_due(self, schedule: dict):
+        """Callback from the background scheduler thread."""
+        if self.running:
+            self.message_queue.put(
+                "Scheduled job is due but another run is active. Will retry soon.\n"
+            )
+            return False
+        self.root.after(0, lambda: self._start_scheduled_job(schedule))
+        return True
+
+    def _start_scheduled_job(self, schedule: dict):
+        if self.running:
+            self.message_queue.put(
+                "Scheduled job is due but another run is active. Will retry soon.\n"
+            )
+            if self.scheduler_service:
+                self.scheduler_service._active_schedule_id = None
+            return False
+        days_ago = max(0, int(schedule.get("run_for_days_ago") or 1))
+        target_date = datetime.combine(
+            (datetime.now() - timedelta(days=days_ago)).date(), datetime.min.time()
+        )
+        date_str = target_date.strftime("%d-%b-%Y")
+        schedule_id = schedule.get("id")
+        if schedule_id:
+            self.scheduler_store.mark_running(schedule_id, "Triggered automatically")
+        self.current_schedule_id = schedule_id
+        self.current_run_origin = "scheduled"
+        self._start_task_with_date(
+            schedule.get("task", "all"), target_date, date_str, origin="scheduled"
+        )
+        return True
+
+    def _run_schedule_now(self):
+        """Manual trigger to test the saved schedule."""
+        if self.running:
+            messagebox.showinfo(
+                "Automation already running",
+                "Please wait for the current run to finish before triggering again.",
+            )
+            return
+        schedule = self.scheduler_store.get_by_key("marketing_reports")
+        if not schedule:
+            messagebox.showerror("No schedule", "Please save a schedule first.")
+            return
+        self._start_scheduled_job(schedule)
+
+    def _open_last_log(self):
+        """Open the last log file in the default editor (best effort)."""
+        if not self.last_log_path:
+            messagebox.showinfo("No log available", "No log file recorded yet.")
+            return
+        try:
+            os.startfile(self.last_log_path)  # type: ignore[attr-defined]
+        except Exception:
+            messagebox.showerror(
+                "Could not open log",
+                f"Please open the file manually:\n{self.last_log_path}",
+            )
 
 
 def main():

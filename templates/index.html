@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smyle Automation Suite</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.0/socket.io.min.js"></script>
+    <style>
+        :root {
+            --bg: #0b1221;
+            --card-bg: #111827;
+            --accent: #22d3ee;
+            --accent-dark: #0ea5e9;
+            --text-primary: #e5e7eb;
+            --text-secondary: #94a3b8;
+            --danger: #f43f5e;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --border: #1f2937;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        .header {
+            margin-bottom: 24px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        /* Navigation */
+        .nav {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .nav-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .nav-btn.active {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .nav-btn:not(.active) {
+            background: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .nav-btn:not(.active):hover {
+            background: #1a2235;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-subtitle {
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-accent {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .badge-secondary {
+            background: var(--border);
+            color: var(--text-secondary);
+        }
+
+        .badge-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .badge-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .badge-warning {
+            background: var(--warning);
+            color: var(--bg);
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: #0d1428;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .form-input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        select.form-input {
+            cursor: pointer;
+        }
+
+        /* Grid */
+        .grid {
+            display: grid;
+            gap: 16px;
+        }
+
+        .grid-2 { grid-template-columns: repeat(2, 1fr); }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .grid-4 { grid-template-columns: repeat(4, 1fr); }
+
+        @media (max-width: 768px) {
+            .grid-2, .grid-3, .grid-4 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: var(--accent-dark);
+        }
+
+        .btn-secondary {
+            background: var(--card-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #1a2235;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #e11d48;
+        }
+
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 12px;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* Status */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+            background: #0d1428;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.running {
+            background: var(--success);
+        }
+
+        .status-indicator.idle {
+            background: var(--text-secondary);
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .status-text {
+            flex: 1;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+        }
+
+        /* Progress */
+        .progress-bar {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--accent-dark));
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .progress-fill.indeterminate {
+            width: 30%;
+            animation: indeterminate 1.5s infinite linear;
+        }
+
+        @keyframes indeterminate {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(400%); }
+        }
+
+        /* Log */
+        .log-container {
+            background: #0d1428;
+            border-radius: 8px;
+            padding: 16px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .log-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .log-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .log-container::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        /* Pages */
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        /* Home Cards Grid */
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .tool-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 24px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .tool-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .tool-card h3 {
+            font-size: 18px;
+            margin: 12px 0 8px;
+        }
+
+        .tool-card p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+
+        /* Checkbox */
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .checkbox-label input {
+            width: 20px;
+            height: 20px;
+            accent-color: var(--accent);
+        }
+
+        /* Info Grid */
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .info-item {
+            padding: 12px;
+            background: #0d1428;
+            border-radius: 8px;
+        }
+
+        .info-item .label {
+            color: var(--text-secondary);
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .info-item .value {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+        }
+
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .toast {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideIn 0.3s ease;
+            max-width: 400px;
+        }
+
+        .toast.success { border-left: 4px solid var(--success); }
+        .toast.error { border-left: 4px solid var(--danger); }
+        .toast.info { border-left: 4px solid var(--accent); }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Table */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        td {
+            font-size: 14px;
+        }
+
+        tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .table-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Toggle Switch */
+        .toggle {
+            position: relative;
+            width: 48px;
+            height: 24px;
+        }
+
+        .toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border);
+            transition: 0.3s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .toggle input:checked + .toggle-slider {
+            background-color: var(--success);
+        }
+
+        .toggle input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state h3 {
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>Smyle Automation Suite</h1>
+            <p>Web-based automation dashboard for marketing reports</p>
+        </div>
+
+        <!-- Navigation -->
+        <div class="nav">
+            <button class="nav-btn active" onclick="showPage('home')">Home</button>
+            <button class="nav-btn" onclick="showPage('schedules')">Schedules</button>
+            <button class="nav-btn" onclick="showPage('settings')">Settings</button>
+        </div>
+
+        <!-- Home Page -->
+        <div id="page-home" class="page active">
+            <div class="tools-grid">
+                <div class="tool-card">
+                    <span class="badge badge-accent">In use</span>
+                    <h3>Marketing Reports</h3>
+                    <p>Daily + Order Type automations for Looker Studio and Converge.</p>
+                    <button class="btn btn-primary" onclick="showPage('reports')">Open</button>
+                </div>
+                <div class="tool-card">
+                    <span class="badge badge-secondary">Coming soon</span>
+                    <h3>Data Quality Checks</h3>
+                    <p>Reserved slot for upcoming QA automation.</p>
+                    <button class="btn btn-secondary" disabled>Reserved</button>
+                </div>
+                <div class="tool-card">
+                    <span class="badge badge-secondary">Coming soon</span>
+                    <h3>Backup & Sync</h3>
+                    <p>Reserved slot for syncing artifacts to storage.</p>
+                    <button class="btn btn-secondary" disabled>Reserved</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reports Page (Marketing Reports) -->
+        <div id="page-reports" class="page">
+            <!-- Back button -->
+            <button class="btn btn-secondary" onclick="showPage('home')" style="margin-bottom: 20px;">
+                ← Back to tools
+            </button>
+
+            <div class="header" style="margin-bottom: 20px;">
+                <h1 style="font-size: 24px;">Marketing Reports</h1>
+                <p>Daily + Order Type automations, same business logic, new UI.</p>
+            </div>
+
+            <!-- Run Reports Card -->
+            <div class="card">
+                <h2 class="card-title">Run Reports</h2>
+                <p class="card-subtitle">Pick a date (blank = previous day) then choose which automation to launch.</p>
+
+                <div class="grid grid-2" style="margin-bottom: 20px;">
+                    <div class="form-group">
+                        <label class="form-label">Extraction date (DD-MMM-YYYY)</label>
+                        <input type="text" id="date-input" class="form-input" placeholder="e.g., 09-Oct-2025">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">&nbsp;</label>
+                        <button class="btn btn-secondary" onclick="fillPreviousDay()">Use previous day</button>
+                    </div>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="btn-run-all" onclick="runTask('all')">
+                        Run All Reports
+                    </button>
+                    <button class="btn btn-secondary" id="btn-run-daily" onclick="runTask('daily')">
+                        Daily Report only
+                    </button>
+                    <button class="btn btn-secondary" id="btn-run-order" onclick="runTask('order')">
+                        Order Type only
+                    </button>
+                    <button class="btn btn-secondary" id="btn-run-scheduled" onclick="runScheduleNow()">
+                        Run Scheduled
+                    </button>
+                    <button class="btn btn-danger" id="btn-stop" onclick="stopTask()" disabled>
+                        Stop run
+                    </button>
+                </div>
+            </div>
+
+            <!-- Status Card -->
+            <div class="card">
+                <h2 class="card-title">Live status</h2>
+                <div class="status-bar">
+                    <div class="status-indicator idle" id="status-indicator"></div>
+                    <span class="status-text" id="status-text">Idle: waiting to run a task</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+            </div>
+
+
+            <!-- Log Card -->
+            <div class="card">
+                <h2 class="card-title">Run log</h2>
+                <div class="log-container" id="log-container">Outputs from the automation scripts will stream here.
+
+</div>
+            </div>
+        </div>
+
+        <!-- Schedules Page -->
+        <div id="page-schedules" class="page">
+            <!-- Schedule Configuration Card -->
+            <div class="card">
+                <h2 class="card-title">Configure Schedule</h2>
+                <p class="card-subtitle">Set up automatic runs for your automations</p>
+
+                <div class="grid grid-3" style="margin-bottom: 20px;">
+                    <div class="form-group">
+                        <label class="form-label">Automation</label>
+                        <select id="schedule-task" class="form-input">
+                            <option value="all">Marketing Reports - All</option>
+                            <option value="daily">Marketing Reports - Daily Only</option>
+                            <option value="order">Marketing Reports - Order Type Only</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Recurrence</label>
+                        <select id="schedule-recurrence" class="form-input">
+                            <option value="hourly">Hourly</option>
+                            <option value="daily" selected>Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="every_4_days">Every 4 days</option>
+                            <option value="monthly">Monthly</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Time of day (HH:MM)</label>
+                        <input type="text" id="schedule-time" class="form-input">
+                    </div>
+                </div>
+
+                <div class="grid grid-3" style="margin-bottom: 20px;">
+                    <div class="form-group">
+                        <label class="form-label">Start date (YYYY-MM-DD)</label>
+                        <input type="text" id="schedule-start" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Run data for days ago</label>
+                        <input type="number" id="schedule-days-ago" class="form-input" value="1" min="0" max="30">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">&nbsp;</label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="schedule-enabled">
+                            Enable schedule
+                        </label>
+                    </div>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="saveSchedule()">Save Schedule</button>
+                    <button class="btn btn-secondary" onclick="runScheduleNow()">Run Now</button>
+                </div>
+
+                <div class="info-grid" style="margin-top: 20px;">
+                    <div class="info-item">
+                        <div class="label">Next scheduled run</div>
+                        <div class="value" id="schedule-next-run">Not scheduled</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="label">Last run result</div>
+                        <div class="value" id="schedule-last-status">No runs yet</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- All Schedules Table -->
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <div>
+                        <h2 class="card-title" style="margin-bottom: 4px;">All Schedules</h2>
+                        <p class="card-subtitle" style="margin-bottom: 0;">View and manage all scheduled automations</p>
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadAllSchedules()">Refresh</button>
+                </div>
+
+                <div class="table-container">
+                    <table id="schedules-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Task</th>
+                                <th>Recurrence</th>
+                                <th>Time</th>
+                                <th>Next Run</th>
+                                <th>Last Status</th>
+                                <th>Enabled</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="schedules-tbody">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="schedules-empty" class="empty-state" style="display: none;">
+                    <h3>No schedules yet</h3>
+                    <p>Configure a schedule above to get started.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Page -->
+        <div id="page-settings" class="page">
+            <div class="card">
+                <h2 class="card-title">Marketing Sheet Settings</h2>
+                <p class="card-subtitle">Stored locally in config.db (seeded from .env on first load).</p>
+
+                <div class="form-group">
+                    <label class="form-label">SPREAD_SHEET_NAME</label>
+                    <input type="text" id="setting-spreadsheet" class="form-input">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">WORK_SHEET_NAME</label>
+                    <input type="text" id="setting-worksheet" class="form-input">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">ORDER_TYPE_SHEET_URL</label>
+                    <input type="text" id="setting-ordertype" class="form-input">
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+                    <button class="btn btn-secondary" onclick="loadSettings()">Reload</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script>
+        // WebSocket connection
+        const socket = io();
+        let isRunning = false;
+
+        // Socket events
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+
+        socket.on('log_message', (data) => {
+            appendLog(data.message);
+        });
+
+        socket.on('status_update', (data) => {
+            updateStatus(data.status, data.running);
+        });
+
+        // Page navigation
+        function showPage(pageName) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+
+            document.getElementById('page-' + pageName).classList.add('active');
+
+            // Update nav button (only for main nav items)
+            const navBtn = document.querySelector(`.nav-btn[onclick="showPage('${pageName}')"]`);
+            if (navBtn) {
+                navBtn.classList.add('active');
+            } else if (pageName === 'reports') {
+                // Reports page opened from card, highlight Home
+                document.querySelector(`.nav-btn[onclick="showPage('home')"]`).classList.add('active');
+            }
+
+            if (pageName === 'settings') {
+                loadSettings();
+            } else if (pageName === 'schedules') {
+                loadSchedule();
+                loadAllSchedules();
+            }
+        }
+
+        // Status updates
+        function updateStatus(status, running) {
+            isRunning = running;
+            document.getElementById('status-text').textContent = status;
+
+            const indicator = document.getElementById('status-indicator');
+            const progressFill = document.getElementById('progress-fill');
+
+            if (running) {
+                indicator.classList.remove('idle');
+                indicator.classList.add('running');
+                progressFill.classList.add('indeterminate');
+            } else {
+                indicator.classList.remove('running');
+                indicator.classList.add('idle');
+                progressFill.classList.remove('indeterminate');
+            }
+
+            updateButtons(running);
+        }
+
+        function updateButtons(running) {
+            document.getElementById('btn-run-all').disabled = running;
+            document.getElementById('btn-run-daily').disabled = running;
+            document.getElementById('btn-run-order').disabled = running;
+            document.getElementById('btn-run-scheduled').disabled = running;
+            document.getElementById('btn-stop').disabled = !running;
+        }
+
+        // Log handling
+        function appendLog(message) {
+            const container = document.getElementById('log-container');
+            container.textContent += message;
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Toast notifications
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.3s ease reverse';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // API calls
+        async function fillPreviousDay() {
+            try {
+                const response = await fetch('/api/previous-day');
+                const data = await response.json();
+                document.getElementById('date-input').value = data.date;
+            } catch (error) {
+                showToast('Failed to get previous day', 'error');
+            }
+        }
+
+        async function runTask(task) {
+            if (isRunning) {
+                showToast('A task is already running', 'error');
+                return;
+            }
+
+            const dateInput = document.getElementById('date-input').value;
+
+            try {
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task, date: dateInput })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(data.message, 'success');
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to start task', 'error');
+            }
+        }
+
+        async function stopTask() {
+            try {
+                const response = await fetch('/api/stop', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Stop requested', 'info');
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to stop task', 'error');
+            }
+        }
+
+        async function runScheduleNow() {
+            if (isRunning) {
+                showToast('A task is already running', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/run-schedule-now', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Schedule triggered', 'success');
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to trigger schedule', 'error');
+            }
+        }
+
+        // Schedule handling - only refreshes status info, not form inputs
+        async function refreshScheduleStatus() {
+            try {
+                const response = await fetch('/api/schedule');
+                const data = await response.json();
+
+                if (data.schedule) {
+                    const s = data.schedule;
+                    document.getElementById('schedule-next-run').textContent = s.next_run || 'Not scheduled';
+
+                    let lastStatus = s.last_status || 'No runs yet';
+                    if (s.last_run) {
+                        lastStatus += ` at ${s.last_run}`;
+                    }
+                    document.getElementById('schedule-last-status').textContent = lastStatus;
+                }
+            } catch (error) {
+                console.error('Failed to refresh schedule status:', error);
+            }
+        }
+
+        // Load full schedule form (only called on initial page load)
+        async function loadSchedule() {
+            try {
+                const response = await fetch('/api/schedule');
+                const data = await response.json();
+
+                // Always set current time as default
+                document.getElementById('schedule-time').value = getCurrentTimeHHMM();
+                document.getElementById('schedule-start').value = new Date().toISOString().split('T')[0];
+
+                if (data.schedule) {
+                    const s = data.schedule;
+                    document.getElementById('schedule-enabled').checked = s.enabled;
+                    document.getElementById('schedule-recurrence').value = s.recurrence || 'daily';
+                    document.getElementById('schedule-task').value = s.task || 'all';
+                    document.getElementById('schedule-days-ago').value = s.run_for_days_ago || 1;
+                    document.getElementById('schedule-next-run').textContent = s.next_run || 'Not scheduled';
+
+                    let lastStatus = s.last_status || 'No runs yet';
+                    if (s.last_run) {
+                        lastStatus += ` at ${s.last_run}`;
+                    }
+                    document.getElementById('schedule-last-status').textContent = lastStatus;
+                }
+            } catch (error) {
+                console.error('Failed to load schedule:', error);
+            }
+        }
+
+        async function saveSchedule() {
+            const schedule = {
+                enabled: document.getElementById('schedule-enabled').checked,
+                recurrence: document.getElementById('schedule-recurrence').value,
+                time_of_day: document.getElementById('schedule-time').value,
+                start_date: document.getElementById('schedule-start').value,
+                task: document.getElementById('schedule-task').value,
+                run_for_days_ago: parseInt(document.getElementById('schedule-days-ago').value)
+            };
+
+            try {
+                const response = await fetch('/api/schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(schedule)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Schedule saved', 'success');
+                    if (data.schedule) {
+                        document.getElementById('schedule-next-run').textContent = data.schedule.next_run || 'Not scheduled';
+                    }
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to save schedule', 'error');
+            }
+        }
+
+        // All Schedules handling
+        async function loadAllSchedules() {
+            try {
+                const response = await fetch('/api/schedules');
+                const data = await response.json();
+
+                const tbody = document.getElementById('schedules-tbody');
+                const emptyState = document.getElementById('schedules-empty');
+
+                if (!data.schedules || data.schedules.length === 0) {
+                    tbody.innerHTML = '';
+                    emptyState.style.display = 'block';
+                    return;
+                }
+
+                emptyState.style.display = 'none';
+                tbody.innerHTML = data.schedules.map(s => `
+                    <tr>
+                        <td><strong>${escapeHtml(s.name)}</strong></td>
+                        <td>${escapeHtml(s.task)}</td>
+                        <td>${escapeHtml(s.recurrence)}</td>
+                        <td>${escapeHtml(s.time_of_day)}</td>
+                        <td>${escapeHtml(s.next_run || 'Not scheduled')}</td>
+                        <td>
+                            <span class="badge ${getStatusBadgeClass(s.last_status)}">
+                                ${escapeHtml(s.last_status || 'No runs')}
+                            </span>
+                        </td>
+                        <td>
+                            <label class="toggle">
+                                <input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSchedule(${s.id}, this.checked)">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </td>
+                        <td>
+                            <div class="table-actions">
+                                <button class="btn btn-danger btn-sm" onclick="deleteSchedule(${s.id})">Delete</button>
+                            </div>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (error) {
+                showToast('Failed to load schedules', 'error');
+            }
+        }
+
+        function getStatusBadgeClass(status) {
+            if (!status) return 'badge-secondary';
+            if (status === 'success') return 'badge-success';
+            if (status === 'failed') return 'badge-danger';
+            if (status === 'running') return 'badge-warning';
+            return 'badge-secondary';
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function toggleSchedule(id, enabled) {
+            try {
+                const response = await fetch(`/api/schedules/${id}/toggle`, { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast(`Schedule ${data.enabled ? 'enabled' : 'disabled'}`, 'success');
+                } else {
+                    showToast(data.error, 'error');
+                    loadAllSchedules(); // Reload to reset toggle state
+                }
+            } catch (error) {
+                showToast('Failed to toggle schedule', 'error');
+                loadAllSchedules();
+            }
+        }
+
+        async function deleteSchedule(id) {
+            if (!confirm('Are you sure you want to delete this schedule?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/schedules/${id}`, { method: 'DELETE' });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Schedule deleted', 'success');
+                    loadAllSchedules();
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to delete schedule', 'error');
+            }
+        }
+
+        // Settings handling
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const data = await response.json();
+
+                document.getElementById('setting-spreadsheet').value = data.SPREAD_SHEET_NAME || '';
+                document.getElementById('setting-worksheet').value = data.WORK_SHEET_NAME || '';
+                document.getElementById('setting-ordertype').value = data.ORDER_TYPE_SHEET_URL || '';
+            } catch (error) {
+                showToast('Failed to load settings', 'error');
+            }
+        }
+
+        async function saveSettings() {
+            const settings = {
+                SPREAD_SHEET_NAME: document.getElementById('setting-spreadsheet').value,
+                WORK_SHEET_NAME: document.getElementById('setting-worksheet').value,
+                ORDER_TYPE_SHEET_URL: document.getElementById('setting-ordertype').value
+            };
+
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Settings saved', 'success');
+                } else {
+                    showToast(data.error || 'Failed to save settings', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to save settings', 'error');
+            }
+        }
+
+        // Helper to get current time as HH:MM
+        function getCurrentTimeHHMM() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            return `${hours}:${minutes}`;
+        }
+
+        // Initial load
+        async function initApp() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                updateStatus(
+                    data.running ? `Running ${data.current_task} for ${data.current_date}` : 'Idle: waiting to run a task',
+                    data.running
+                );
+
+                // Set default start date for scheduler
+                document.getElementById('schedule-start').value = new Date().toISOString().split('T')[0];
+
+                // Set default time of day to current time
+                document.getElementById('schedule-time').value = getCurrentTimeHHMM();
+            } catch (error) {
+                console.error('Failed to init app:', error);
+            }
+        }
+
+        // Start the app
+        initApp();
+
+        // Refresh schedule status every 10 seconds when on schedules page (status only, not form inputs)
+        setInterval(() => {
+            if (document.getElementById('page-schedules').classList.contains('active')) {
+                refreshScheduleStatus();
+                loadAllSchedules();
+            }
+        }, 10000);
+    </script>
+</body>
+</html>

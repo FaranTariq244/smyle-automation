@@ -39,6 +39,10 @@ nul
 chrome_profile/
 logsforCodex.txt
 tableForXodexToReview.txt
+config.db
+
+# Claude Code
+.claude/settings.local.json
 
 # JSON report outputs
 order_type_report_*.json

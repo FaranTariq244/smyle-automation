@@ -17,7 +17,14 @@
       "Bash(move credentials notneeded )",
       "Bash(move venv notneeded )",
       "Bash(mv:*)",
-      "Bash(nul)"
+      "Bash(nul)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(./venv/Scripts/pip.exe install:*)",
+      "Bash(\"D:/Work/GIT/smyle-automation/venv/Scripts/pip.exe\" install flask flask-socketio python-socketio)",
+      "Bash(\"D:/Work/GIT/smyle-automation/venv/Scripts/python.exe\" -m pip install flask flask-socketio python-socketio)",
+      "Bash(\"D:/Work/GIT/smyle-automation/venv/Scripts/python.exe\" -c \"\nimport sys\nsys.path.insert(0, ''D:/Work/GIT/smyle-automation'')\nfrom web_app import app, socketio\nprint(''Web app imports successfully!'')\nprint(''Flask app:'', app)\nprint(''SocketIO:'', socketio)\n\")",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

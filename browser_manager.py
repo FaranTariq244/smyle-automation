@@ -4,11 +4,68 @@ Allows manual login and maintains session across automation runs.
 """
 
 import os
+import subprocess
+import socket
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 import time
+
+
+# Global flag to track if we started Chrome ourselves
+_chrome_started_by_us = False
+
+
+def is_port_in_use(port):
+    """Check if a port is in use (Chrome debugging port)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+
+def start_chrome_with_debugging(profile_dir, port=9222):
+    """Start Chrome with remote debugging enabled."""
+    global _chrome_started_by_us
+
+    # Find Chrome executable
+    chrome_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+    ]
+
+    chrome_exe = None
+    for path in chrome_paths:
+        if os.path.exists(path):
+            chrome_exe = path
+            break
+
+    if not chrome_exe:
+        print("Chrome not found in standard locations")
+        return False
+
+    # Start Chrome with debugging
+    cmd = [
+        chrome_exe,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+    ]
+
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _chrome_started_by_us = True
+        # Wait for Chrome to start
+        for _ in range(10):
+            if is_port_in_use(port):
+                return True
+            time.sleep(0.5)
+        return is_port_in_use(port)
+    except Exception as e:
+        print(f"Failed to start Chrome: {e}")
+        return False
 
 
 class BrowserManager:
@@ -26,6 +83,7 @@ class BrowserManager:
         self.driver = None
         self.use_existing_chrome = use_existing_chrome
         self.chrome_debugger_port = chrome_debugger_port
+        self._connected_to_existing = False
 
         # Set up profile directory
         if profile_dir is None:
@@ -34,12 +92,13 @@ class BrowserManager:
             self.profile_dir = profile_dir
 
         # Create profile directory if it doesn't exist
-        if not os.path.exists(self.profile_dir) and not use_existing_chrome:
+        if not os.path.exists(self.profile_dir):
             os.makedirs(self.profile_dir)
 
     def start_browser(self, headless=False):
         """
         Start the Chrome browser with persistent profile.
+        First tries to connect to existing Chrome, if not available starts a new one.
 
         Args:
             headless: If True, runs Chrome in headless mode (not recommended for manual login)
@@ -49,31 +108,49 @@ class BrowserManager:
         """
         chrome_options = Options()
 
-        if self.use_existing_chrome:
-            # Connect to existing Chrome instance
+        # Check if Chrome is already running with debugging
+        chrome_running = is_port_in_use(self.chrome_debugger_port)
+
+        if chrome_running:
+            # Connect to existing Chrome
+            print(f"Connecting to existing Chrome on port {self.chrome_debugger_port}...")
             chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.chrome_debugger_port}")
+            self._connected_to_existing = True
         else:
-            # Use persistent profile
-            chrome_options.add_argument(f"user-data-dir={self.profile_dir}")
-            chrome_options.add_argument("--no-first-run")
-            chrome_options.add_argument("--no-default-browser-check")
+            # Start Chrome with debugging enabled
+            print("Starting new Chrome with remote debugging...")
+            if start_chrome_with_debugging(self.profile_dir, self.chrome_debugger_port):
+                chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.chrome_debugger_port}")
+                self._connected_to_existing = True
+            else:
+                # Fallback: start Chrome normally via Selenium
+                print("Fallback: Starting Chrome via Selenium...")
+                chrome_options.add_argument(f"user-data-dir={self.profile_dir}")
+                chrome_options.add_argument(f"--remote-debugging-port={self.chrome_debugger_port}")
+                chrome_options.add_argument("--no-first-run")
+                chrome_options.add_argument("--no-default-browser-check")
+                self._connected_to_existing = False
 
-        # Additional useful options
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
+        # Additional useful options (only if not connecting to existing)
+        if not self._connected_to_existing:
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
 
-        if headless:
-            chrome_options.add_argument("--headless")
+            if headless:
+                chrome_options.add_argument("--headless")
 
         # Initialize the driver
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
 
-        # Make browser look more like a real user
-        self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-            "userAgent": self.driver.execute_script("return navigator.userAgent").replace('HeadlessChrome', 'Chrome')
-        })
+        # Make browser look more like a real user (only if we can)
+        try:
+            self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                "userAgent": self.driver.execute_script("return navigator.userAgent").replace('HeadlessChrome', 'Chrome')
+            })
+        except Exception:
+            pass
 
         return self.driver
 
@@ -114,9 +191,20 @@ class BrowserManager:
         return False
 
     def close(self):
-        """Close the browser."""
+        """Close the browser connection (keeps Chrome open if connected to existing)."""
         if self.driver:
-            self.driver.quit()
+            if self._connected_to_existing:
+                # Just disconnect, don't close Chrome
+                print("Disconnecting from Chrome (keeping browser open)...")
+                try:
+                    # Close chromedriver connection without closing browser
+                    self.driver.service.stop()
+                except Exception:
+                    pass
+            else:
+                # Close Chrome completely
+                self.driver.quit()
+            self.driver = None
 
     def get_driver(self):
         """Get the WebDriver instance."""

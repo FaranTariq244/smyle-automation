@@ -1,14 +1,21 @@
 """
 Parent Runner - Execute all report extractions in one go
-Runs both daily report and order type report extractions sequentially
+Runs daily report, order type report, and add tracker extractions sequentially
 
-This script runs both reports one after another to avoid browser conflicts.
+This script runs all reports one after another to avoid browser conflicts.
 Each report uses the same browser profile, so login is only needed once.
 """
 
 from datetime import datetime, timedelta
 import sys
 import os
+
+
+# Import Add Tracker report function
+def run_add_tracker_report(date_obj, date_str):
+    """Run the Add Tracker report extraction."""
+    from atria_data_extractor import run_add_tracker_report as _run_add_tracker
+    return _run_add_tracker(date_obj, date_str)
 
 
 def get_date_input():

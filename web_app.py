@@ -60,6 +60,7 @@ SETTINGS_KEYS = [
     "SPREAD_SHEET_NAME",
     "WORK_SHEET_NAME",
     "ORDER_TYPE_SHEET_URL",
+    "DAILY_ADD_TRACKER_SHEET_URL",
 ]
 
 
@@ -98,7 +99,7 @@ def build_subprocess_code(task: str, date_str: str) -> str:
     return f"""
 import sys
 from datetime import datetime
-from run_all_reports import run_daily_report, run_order_type_report
+from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report
 date_str = "{date_str}"
 date_obj = datetime.strptime(date_str, "%d-%b-%Y")
 try:
@@ -106,10 +107,13 @@ try:
         ok = run_daily_report(date_obj, date_str)
     elif "{task}" == "order":
         ok = run_order_type_report(date_obj, date_str)
+    elif "{task}" == "addtracker":
+        ok = run_add_tracker_report(date_obj, date_str)
     else:
         d_ok = run_daily_report(date_obj, date_str)
         o_ok = run_order_type_report(date_obj, date_str)
-        ok = d_ok and o_ok
+        a_ok = run_add_tracker_report(date_obj, date_str)
+        ok = d_ok and o_ok and a_ok
     sys.exit(0 if ok else 1)
 except Exception as exc:
     print(f"Unexpected error: {{exc}}")
@@ -170,6 +174,7 @@ def on_task_complete(task: str, date_str: str, success: bool):
         "all": "All reports",
         "daily": "Daily Report",
         "order": "Order Type Report",
+        "addtracker": "Daily Add Tracker",
     }.get(task, "Automation")
 
     status = "completed successfully"
@@ -271,6 +276,7 @@ def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: s
         "all": "All reports",
         "daily": "Daily Report",
         "order": "Order Type Report",
+        "addtracker": "Daily Add Tracker",
     }.get(task, "Automation")
 
     origin_label = "Scheduled run" if origin == "scheduled" else "Manual run"
@@ -563,6 +569,7 @@ def stop_task():
             "all": "All reports",
             "daily": "Daily Report",
             "order": "Order Type Report",
+            "addtracker": "Daily Add Tracker",
         }.get(task or "", "Automation")
 
         broadcast_status(f"{task_name} stopped by user", False)
@@ -615,4 +622,4 @@ if __name__ == '__main__':
     print("\nServer running at: http://localhost:5000")
     print("Press Ctrl+C to stop\n")
 
-    socketio.run(app, host='0.0.0.0', port=5001, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=5002, debug=False, allow_unsafe_werkzeug=True)

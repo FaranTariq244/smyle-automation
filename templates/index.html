@@ -630,6 +630,9 @@
                     <button class="btn btn-secondary" id="btn-run-order" onclick="runTask('order')">
                         Order Type only
                     </button>
+                    <button class="btn btn-secondary" id="btn-run-addtracker" onclick="runTask('addtracker')">
+                        Daily Add Tracker
+                    </button>
                     <button class="btn btn-secondary" id="btn-run-scheduled" onclick="runScheduleNow()">
                         Run Scheduled
                     </button>
@@ -675,6 +678,7 @@
                             <option value="all">Marketing Reports - All</option>
                             <option value="daily">Marketing Reports - Daily Only</option>
                             <option value="order">Marketing Reports - Order Type Only</option>
+                            <option value="addtracker">Marketing Reports - Daily Add Tracker</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -791,6 +795,21 @@
                     <button class="btn btn-secondary" onclick="loadSettings()">Reload</button>
                 </div>
             </div>
+
+            <div class="card">
+                <h2 class="card-title">Daily Add Tracker Sheet Settings</h2>
+                <p class="card-subtitle">Configuration for the Daily Add Tracker automation.</p>
+
+                <div class="form-group">
+                    <label class="form-label">DAILY_ADD_TRACKER_SHEET_URL</label>
+                    <input type="text" id="setting-addtracker" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+                    <button class="btn btn-secondary" onclick="loadSettings()">Reload</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -864,6 +883,7 @@
             document.getElementById('btn-run-all').disabled = running;
             document.getElementById('btn-run-daily').disabled = running;
             document.getElementById('btn-run-order').disabled = running;
+            document.getElementById('btn-run-addtracker').disabled = running;
             document.getElementById('btn-run-scheduled').disabled = running;
             document.getElementById('btn-stop').disabled = !running;
         }
@@ -1151,6 +1171,7 @@
                 document.getElementById('setting-spreadsheet').value = data.SPREAD_SHEET_NAME || '';
                 document.getElementById('setting-worksheet').value = data.WORK_SHEET_NAME || '';
                 document.getElementById('setting-ordertype').value = data.ORDER_TYPE_SHEET_URL || '';
+                document.getElementById('setting-addtracker').value = data.DAILY_ADD_TRACKER_SHEET_URL || '';
             } catch (error) {
                 showToast('Failed to load settings', 'error');
             }
@@ -1160,7 +1181,8 @@
             const settings = {
                 SPREAD_SHEET_NAME: document.getElementById('setting-spreadsheet').value,
                 WORK_SHEET_NAME: document.getElementById('setting-worksheet').value,
-                ORDER_TYPE_SHEET_URL: document.getElementById('setting-ordertype').value
+                ORDER_TYPE_SHEET_URL: document.getElementById('setting-ordertype').value,
+                DAILY_ADD_TRACKER_SHEET_URL: document.getElementById('setting-addtracker').value
             };
 
             try {

@@ -439,13 +439,13 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
             return row
 
         # Try partial match (URL contains target or target contains URL)
-        # But ONLY if countries match
+        # But ONLY if countries match (strict check - both must have same country)
         if target_normalized in landing_normalized or landing_normalized in target_normalized:
-            if target_country == landing_country or not target_country or not landing_country:
+            if target_country == landing_country:
                 print(f"    [URL] Partial match found: {landing_page}")
                 return row
             else:
-                print(f"    [URL] Partial path match but COUNTRY MISMATCH: {landing_page} (target={target_country}, found={landing_country})")
+                print(f"    [URL] Partial path match but COUNTRY MISMATCH: {landing_page} (target='{target_country}', found='{landing_country}')")
 
         # Try matching just the path part after /pages/ or /products/
         # CRITICAL: Must also match on country to avoid mixing data between regions
@@ -456,16 +456,15 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
                 if target_path == landing_path:
                     # IMPORTANT: Check if countries match before accepting
                     if target_country == landing_country:
+                        # Both have same country (or both have no country)
                         print(f"    [URL] Path + country match found: {landing_page}")
-                        return row
-                    elif not target_country or not landing_country:
-                        # If we can't determine country for one/both, allow match but warn
-                        print(f"    [URL] Path match found (country unknown): {landing_page}")
                         return row
                     else:
                         # Countries DON'T match - this is NOT a valid match!
+                        # This includes cases where one has country and other doesn't
+                        # e.g., wesmyle.com/nl/products/x vs wesmyle.com/products/x
                         print(f"    [URL] Path matches but COUNTRY MISMATCH - SKIPPING: {landing_page}")
-                        print(f"           Sheet country: {target_country}, Atria country: {landing_country}")
+                        print(f"           Sheet country: '{target_country}', Atria country: '{landing_country}'")
                         # Continue searching for correct match
 
     print(f"    [URL] No match found. Available Atria URLs:")

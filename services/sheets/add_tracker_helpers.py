@@ -353,6 +353,42 @@ def normalize_url(url: str) -> str:
     return url
 
 
+def strip_query_params(url: str) -> str:
+    """
+    Remove query parameters from a URL.
+    e.g., "wesmyle.com/pages/test?currency=GBP" -> "wesmyle.com/pages/test"
+
+    Args:
+        url: URL string
+
+    Returns:
+        URL without query parameters
+    """
+    if not url:
+        return ""
+
+    # Split on ? and take only the base part
+    return url.split('?')[0]
+
+
+def get_query_params(url: str) -> str:
+    """
+    Extract query parameters from a URL.
+    e.g., "wesmyle.com/pages/test?currency=GBP" -> "currency=GBP"
+
+    Args:
+        url: URL string
+
+    Returns:
+        Query string (without ?) or empty string if none
+    """
+    if not url or '?' not in url:
+        return ""
+
+    parts = url.split('?')
+    return parts[1] if len(parts) > 1 else ""
+
+
 def extract_country_from_url(url: str) -> str:
     """
     Extract country/region identifier from a wesmyle URL.
@@ -402,9 +438,10 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
     """
     Find the Atria data row that matches the target URL.
 
-    IMPORTANT: URLs must match on BOTH country/region AND product path.
-    - wesmyle.com/nl/products/x and wesmyle.de/products/x are DIFFERENT (NL vs DE)
-    - wesmyle.com/nl/products/x and wesmyle.nl/products/x are the SAME (both NL)
+    IMPORTANT: URLs must match on ALL of these:
+    1. Country/region (wesmyle.com/nl vs wesmyle.de)
+    2. Product/page path
+    3. Query parameters (e.g., ?currency=GBP)
 
     Args:
         atria_data: List of dictionaries from Atria extraction
@@ -418,10 +455,15 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
         print(f"    [URL] Target URL is empty")
         return None
 
-    # Extract country from target URL
+    # Extract country and query params from target URL
     target_country = extract_country_from_url(target_url)
+    target_base = strip_query_params(target_url)
+    target_query = get_query_params(target_url)
+
     print(f"    [URL] Looking for: {target_normalized}")
     print(f"    [URL] Target country: {target_country if target_country else '(none detected)'}")
+    if target_query:
+        print(f"    [URL] Target query params: {target_query}")
 
     for row in atria_data:
         landing_page = row.get('Landing page', '')
@@ -430,17 +472,28 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
         if not landing_normalized:
             continue
 
-        # Extract country from Atria landing page
+        # Extract country and query params from Atria landing page
         landing_country = extract_country_from_url(landing_page)
+        landing_base = strip_query_params(landing_page)
+        landing_query = get_query_params(landing_page)
 
-        # Try exact match first
+        # Try exact match first (including query params)
         if landing_normalized == target_normalized:
             print(f"    [URL] Exact match found: {landing_page}")
             return row
 
-        # Try partial match (URL contains target or target contains URL)
-        # But ONLY if countries match (strict check - both must have same country)
-        if target_normalized in landing_normalized or landing_normalized in target_normalized:
+        # Check query parameter compatibility
+        # If target has no query params, Atria URL should also have no query params
+        # If target has query params, Atria URL should have the same query params
+        if target_query != landing_query:
+            if target_query or landing_query:  # At least one has query params
+                print(f"    [URL] Query params mismatch - SKIPPING: {landing_page}")
+                print(f"           Sheet query: '{target_query}', Atria query: '{landing_query}'")
+                continue  # Skip this URL, continue searching
+
+        # Try partial match on BASE URL (without query params)
+        # But ONLY if countries match
+        if target_base in landing_base or landing_base in target_base:
             if target_country == landing_country:
                 print(f"    [URL] Partial match found: {landing_page}")
                 return row
@@ -450,9 +503,9 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
         # Try matching just the path part after /pages/ or /products/
         # CRITICAL: Must also match on country to avoid mixing data between regions
         for path_marker in ['/pages/', '/products/']:
-            if path_marker in target_normalized and path_marker in landing_normalized:
-                target_path = target_normalized.split(path_marker)[-1]
-                landing_path = landing_normalized.split(path_marker)[-1]
+            if path_marker in target_base and path_marker in landing_base:
+                target_path = target_base.split(path_marker)[-1]
+                landing_path = landing_base.split(path_marker)[-1]
                 if target_path == landing_path:
                     # IMPORTANT: Check if countries match before accepting
                     if target_country == landing_country:
@@ -461,8 +514,6 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
                         return row
                     else:
                         # Countries DON'T match - this is NOT a valid match!
-                        # This includes cases where one has country and other doesn't
-                        # e.g., wesmyle.com/nl/products/x vs wesmyle.com/products/x
                         print(f"    [URL] Path matches but COUNTRY MISMATCH - SKIPPING: {landing_page}")
                         print(f"           Sheet country: '{target_country}', Atria country: '{landing_country}'")
                         # Continue searching for correct match
@@ -471,7 +522,8 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
     for i, row in enumerate(atria_data[:5]):
         lp = row.get('Landing page', 'N/A')
         country = extract_country_from_url(lp)
-        print(f"         {i+1}. {lp} (country: {country})")
+        query = get_query_params(lp)
+        print(f"         {i+1}. {lp} (country: '{country}', query: '{query}')")
     if len(atria_data) > 5:
         print(f"         ... and {len(atria_data) - 5} more")
 

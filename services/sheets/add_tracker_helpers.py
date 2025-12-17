@@ -353,9 +353,58 @@ def normalize_url(url: str) -> str:
     return url
 
 
+def extract_country_from_url(url: str) -> str:
+    """
+    Extract country/region identifier from a wesmyle URL.
+
+    Handles two patterns:
+    1. Country in domain TLD: wesmyle.de/products/... -> 'de'
+    2. Country in path on .com: wesmyle.com/nl/products/... -> 'nl'
+
+    Args:
+        url: URL string (can be with or without protocol)
+
+    Returns:
+        Country code (e.g., 'de', 'nl', 'fr') or empty string if not found
+    """
+    if not url:
+        return ""
+
+    url = str(url).lower().strip()
+    # Remove protocol
+    url = url.replace('https://', '').replace('http://', '')
+    url = url.replace('www.', '')
+
+    # Check for country-specific TLD (e.g., wesmyle.de, wesmyle.nl)
+    # Pattern: wesmyle.XX/... where XX is a 2-letter country code
+    if url.startswith('wesmyle.'):
+        parts = url.split('/')
+        domain = parts[0]  # e.g., "wesmyle.de"
+        tld = domain.split('.')[-1]  # e.g., "de"
+
+        # If TLD is a 2-letter country code (not 'com'), use it
+        if len(tld) == 2 and tld != 'co':  # 'co' could be .co.uk
+            return tld
+
+    # Check for country in path on .com (e.g., wesmyle.com/nl/products/...)
+    # Pattern: wesmyle.com/XX/... where XX is a 2-letter country code
+    if 'wesmyle.com/' in url:
+        after_domain = url.split('wesmyle.com/')[-1]
+        path_parts = after_domain.split('/')
+        if path_parts and len(path_parts[0]) == 2:
+            # First part is a 2-letter code (country)
+            return path_parts[0]
+
+    return ""
+
+
 def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional[Dict]:
     """
     Find the Atria data row that matches the target URL.
+
+    IMPORTANT: URLs must match on BOTH country/region AND product path.
+    - wesmyle.com/nl/products/x and wesmyle.de/products/x are DIFFERENT (NL vs DE)
+    - wesmyle.com/nl/products/x and wesmyle.nl/products/x are the SAME (both NL)
 
     Args:
         atria_data: List of dictionaries from Atria extraction
@@ -364,21 +413,25 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
     Returns:
         Dictionary with matched data, None if not found
     """
-    # target_normalized = normalize_url(target_url)
     target_normalized = target_url
     if not target_normalized:
         print(f"    [URL] Target URL is empty")
         return None
 
+    # Extract country from target URL
+    target_country = extract_country_from_url(target_url)
     print(f"    [URL] Looking for: {target_normalized}")
+    print(f"    [URL] Target country: {target_country if target_country else '(none detected)'}")
 
     for row in atria_data:
         landing_page = row.get('Landing page', '')
-        # landing_normalized = normalize_url(landing_page)
         landing_normalized = landing_page
 
         if not landing_normalized:
             continue
+
+        # Extract country from Atria landing page
+        landing_country = extract_country_from_url(landing_page)
 
         # Try exact match first
         if landing_normalized == target_normalized:
@@ -386,23 +439,40 @@ def match_atria_data_to_url(atria_data: List[Dict], target_url: str) -> Optional
             return row
 
         # Try partial match (URL contains target or target contains URL)
+        # But ONLY if countries match
         if target_normalized in landing_normalized or landing_normalized in target_normalized:
-            print(f"    [URL] Partial match found: {landing_page}")
-            return row
+            if target_country == landing_country or not target_country or not landing_country:
+                print(f"    [URL] Partial match found: {landing_page}")
+                return row
+            else:
+                print(f"    [URL] Partial path match but COUNTRY MISMATCH: {landing_page} (target={target_country}, found={landing_country})")
 
         # Try matching just the path part after /pages/ or /products/
+        # CRITICAL: Must also match on country to avoid mixing data between regions
         for path_marker in ['/pages/', '/products/']:
             if path_marker in target_normalized and path_marker in landing_normalized:
                 target_path = target_normalized.split(path_marker)[-1]
                 landing_path = landing_normalized.split(path_marker)[-1]
                 if target_path == landing_path:
-                    print(f"    [URL] Path match found: {landing_page}")
-                    return row
+                    # IMPORTANT: Check if countries match before accepting
+                    if target_country == landing_country:
+                        print(f"    [URL] Path + country match found: {landing_page}")
+                        return row
+                    elif not target_country or not landing_country:
+                        # If we can't determine country for one/both, allow match but warn
+                        print(f"    [URL] Path match found (country unknown): {landing_page}")
+                        return row
+                    else:
+                        # Countries DON'T match - this is NOT a valid match!
+                        print(f"    [URL] Path matches but COUNTRY MISMATCH - SKIPPING: {landing_page}")
+                        print(f"           Sheet country: {target_country}, Atria country: {landing_country}")
+                        # Continue searching for correct match
 
     print(f"    [URL] No match found. Available Atria URLs:")
     for i, row in enumerate(atria_data[:5]):
         lp = row.get('Landing page', 'N/A')
-        print(f"         {i+1}. {lp}")
+        country = extract_country_from_url(lp)
+        print(f"         {i+1}. {lp} (country: {country})")
     if len(atria_data) > 5:
         print(f"         ... and {len(atria_data) - 5} more")
 

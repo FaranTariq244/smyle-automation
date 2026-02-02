@@ -1058,71 +1058,86 @@ class AtriaDataExtractor:
             except Exception as e:
                 print(f"[AG-GRID] Grid scroll error (continuing anyway): {e}")
 
-            # Scroll horizontally to load all columns (AG Grid uses virtual column scrolling)
-            print("[AG-GRID] Scrolling grid horizontally to load all columns...")
+            # Collect headers from all scroll positions (AG Grid uses virtual column scrolling)
+            print("[AG-GRID] Collecting headers from all scroll positions...")
+            all_collected_headers = []
+            all_collected_col_ids = {}  # Map col-id to header text
+
             try:
-                # Find horizontal scroll containers
                 h_scroll_viewport = self.driver.find_element(By.CSS_SELECTOR, ".ag-body-horizontal-scroll-viewport")
-                # Scroll to the right to reveal all columns
-                self.driver.execute_script("arguments[0].scrollLeft = arguments[0].scrollWidth;", h_scroll_viewport)
-                time.sleep(1)
-                # Scroll back to left
-                self.driver.execute_script("arguments[0].scrollLeft = 0;", h_scroll_viewport)
-                time.sleep(1)
-                print("[AG-GRID] Horizontal scroll completed")
-            except Exception as e:
-                print(f"[AG-GRID] Horizontal scroll error (continuing anyway): {e}")
+                max_scroll = self.driver.execute_script("return arguments[0].scrollWidth;", h_scroll_viewport)
+                print(f"[AG-GRID] Grid max scroll width: {max_scroll}px")
 
-            # Extract headers from AG Grid (including hidden/collapsed ones)
-            headers = []
-            header_positions = []  # Track which positions have headers (for checkbox columns)
-            print("[AG-GRID] Extracting headers...")
-            try:
-                # Get ALL header cells including hidden ones
-                all_header_cells = self.driver.find_elements(By.CSS_SELECTOR, ".ag-header-cell")
-                print(f"[AG-GRID] Found {len(all_header_cells)} total header cells")
+                # Collect headers at different scroll positions
+                scroll_positions = [0, max_scroll // 2, max_scroll]  # Left, Middle, Right
 
-                # Also try to get headers from all column containers
-                left_headers = self.driver.find_elements(By.CSS_SELECTOR, ".ag-pinned-left-header .ag-header-cell")
-                center_headers = self.driver.find_elements(By.CSS_SELECTOR, ".ag-header-container .ag-header-cell")
-                right_headers = self.driver.find_elements(By.CSS_SELECTOR, ".ag-pinned-right-header .ag-header-cell")
+                for pos_idx, scroll_pos in enumerate(scroll_positions):
+                    print(f"[AG-GRID] Collecting headers at scroll position {pos_idx+1}/3 (scrollLeft={scroll_pos})...")
+                    self.driver.execute_script(f"arguments[0].scrollLeft = {scroll_pos};", h_scroll_viewport)
+                    time.sleep(1)
 
-                # Combine all headers (left + center + right)
-                combined_headers = left_headers + center_headers + right_headers
-                if len(combined_headers) > len(all_header_cells):
-                    all_header_cells = combined_headers
-                    print(f"[AG-GRID] Using combined headers: {len(left_headers)} left + {len(center_headers)} center + {len(right_headers)} right = {len(combined_headers)} total")
-
-                for idx, cell in enumerate(all_header_cells):
+                    # Get headers at this position
                     try:
-                        # Extract header text even if not displayed (for hidden columns)
-                        header_text = ""
-                        try:
-                            # Try .ag-header-cell-text
-                            text_elem = cell.find_element(By.CSS_SELECTOR, ".ag-header-cell-text")
-                            header_text = text_elem.text.strip()
-                        except:
-                            # Fallback to cell text
-                            header_text = cell.text.strip()
+                        header_cells = self.driver.find_elements(By.CSS_SELECTOR, ".ag-header-cell")
+                        for cell in header_cells:
+                            try:
+                                col_id = cell.get_attribute('col-id')
+                                if not col_id or col_id == 'selection':
+                                    continue
 
-                        # Also try col-id attribute as fallback
-                        if not header_text:
+                                # Get header text
+                                header_text = ""
+                                try:
+                                    text_elem = cell.find_element(By.CSS_SELECTOR, ".ag-header-cell-text")
+                                    header_text = text_elem.text.strip()
+                                except:
+                                    header_text = cell.text.strip()
+
+                                if header_text and col_id not in all_collected_col_ids:
+                                    all_collected_col_ids[col_id] = header_text
+                                    all_collected_headers.append(header_text)
+                                    print(f"[AG-GRID]   Found: '{header_text}' (col-id={col_id})")
+                            except:
+                                continue
+                    except Exception as e:
+                        print(f"[AG-GRID]   Error at position {pos_idx}: {e}")
+
+                print(f"[AG-GRID] Total unique headers collected: {len(all_collected_headers)}")
+
+                # Keep scrolled to middle for data extraction
+                self.driver.execute_script(f"arguments[0].scrollLeft = {max_scroll // 2};", h_scroll_viewport)
+                time.sleep(1)
+
+            except Exception as e:
+                print(f"[AG-GRID] Header collection error: {e}")
+
+            # Use the headers we collected from all scroll positions
+            headers = all_collected_headers if all_collected_headers else []
+            header_positions = []  # Track which positions have headers (for checkbox columns)
+
+            # If we somehow didn't collect any headers, fall back to old method
+            if not headers:
+                print("[AG-GRID] WARNING: No headers collected from scroll positions, using fallback method...")
+                try:
+                    all_header_cells = self.driver.find_elements(By.CSS_SELECTOR, ".ag-header-cell")
+                    for idx, cell in enumerate(all_header_cells):
+                        try:
                             col_id = cell.get_attribute('col-id')
                             if col_id and col_id not in ['selection', 'ag-Grid-AutoColumn']:
-                                header_text = col_id.replace('_', ' ').title()
+                                header_text = ""
+                                try:
+                                    text_elem = cell.find_element(By.CSS_SELECTOR, ".ag-header-cell-text")
+                                    header_text = text_elem.text.strip()
+                                except:
+                                    header_text = cell.text.strip()
 
-                        if header_text:
-                            headers.append(header_text)
-                            header_positions.append(idx)
-                            is_displayed = cell.is_displayed()
-                            print(f"[AG-GRID]   Header {idx}: '{header_text}' (displayed={is_displayed})")
-                        else:
-                            print(f"[AG-GRID]   Header {idx}: (empty - likely checkbox)")
-                    except Exception as e:
-                        print(f"[AG-GRID]   Header {idx} error: {e}")
-                        continue
-            except Exception as e:
-                print(f"[AG-GRID] Header extraction error: {e}")
+                                if header_text:
+                                    headers.append(header_text)
+                                    header_positions.append(idx)
+                        except:
+                            continue
+                except Exception as e:
+                    print(f"[AG-GRID] Fallback header extraction error: {e}")
 
             # If no headers found, use known Atria column order
             if not headers or len(headers) < 5:
@@ -1151,10 +1166,10 @@ class AtriaDataExtractor:
 
             if missing_columns:
                 print(f"\n" + "!" * 80)
-                print(f"[AG-GRID] ⚠ WARNING: MISSING {len(missing_columns)} EXPECTED COLUMNS")
+                print(f"[AG-GRID] WARNING: MISSING {len(missing_columns)} EXPECTED COLUMNS")
                 print(f"!" * 80)
                 for col in missing_columns:
-                    print(f"[AG-GRID]   ✗ {col}")
+                    print(f"[AG-GRID]   X {col}")
                 print(f"!" * 80)
                 print(f"[AG-GRID] ACTION REQUIRED:")
                 print(f"[AG-GRID]   1. In Atria, click 'Custom columns' (or column settings icon)")
@@ -1307,28 +1322,34 @@ class AtriaDataExtractor:
 
                         row_data = {}
 
-                        # Determine if we need to skip the first cell (checkbox column)
-                        # If we have header_positions and the first one is > 0, skip cells before it
-                        cell_offset = 0
-                        if header_positions and header_positions[0] > 0:
-                            cell_offset = header_positions[0]
-                            if row_idx == 0:
-                                print(f"[AG-GRID] Skipping first {cell_offset} cells (checkbox columns)")
-
-                        for cell_idx, cell in enumerate(cells[cell_offset:]):
+                        # Use col-id based mapping instead of positional mapping
+                        # This ensures proper alignment even with virtual scrolling
+                        for cell_idx, cell in enumerate(cells):
                             try:
-                                # Map cell index to header index
-                                header_idx = cell_idx
-                                if header_idx >= len(headers):
-                                    if row_idx == 0:
-                                        print(f"[AG-GRID] Row {row_idx}, Cell {cell_idx}: exceeded header count ({len(headers)} headers)")
-                                    break
+                                # Get col-id of this cell
+                                col_id = cell.get_attribute('col-id')
+                                if not col_id or col_id == 'selection':
+                                    continue  # Skip checkbox/selection cells
 
-                                header = headers[header_idx]
+                                # Find matching header for this col-id
+                                header = None
+                                if col_id in all_collected_col_ids:
+                                    header = all_collected_col_ids[col_id]
+
+                                if not header:
+                                    # Fallback: try to map col_id to a header name
+                                    col_name = col_id.replace('_', ' ').title()
+                                    if col_name in headers:
+                                        header = col_name
+                                    else:
+                                        if row_idx == 0:
+                                            print(f"[AG-GRID]   Cell {cell_idx}: Skipping unmapped col-id '{col_id}'")
+                                        continue
+
                                 cell_text = ""
 
                                 # Special handling for Landing page column (URL)
-                                if 'landing page' in header.lower() and cell_idx == 0:
+                                if col_id == 'group_key' or 'landing page' in header.lower():
                                     # Try to extract URL from anchor tag
                                     try:
                                         anchor = cell.find_element(By.CSS_SELECTOR, "a")
@@ -1354,7 +1375,7 @@ class AtriaDataExtractor:
 
                                 # Debug first row
                                 if row_idx < 2:
-                                    print(f"[AG-GRID]   Row {row_idx}, Cell {cell_idx} ({header}): '{cell_text[:50] if cell_text else '(empty)'}'")
+                                    print(f"[AG-GRID]   Row {row_idx}, col-id '{col_id}' ({header}): '{cell_text[:50] if cell_text else '(empty)'}'")
 
                             except Exception as e:
                                 print(f"[AG-GRID] Row {row_idx}, Cell {cell_idx} error: {e}")

@@ -847,13 +847,13 @@ class AtriaDataExtractor:
             import traceback
             traceback.print_exc()
 
-    def wait_for_data_load(self, timeout=30):
+    def wait_for_data_load(self, timeout=15):
         """Wait for data to finish loading."""
         print("[LOAD] Waiting for data to load...")
 
         try:
             # Wait for loading indicator to disappear or data to appear
-            time.sleep(5)  # Initial wait
+            time.sleep(3)  # Initial wait (reduced from 5 to 3)
 
             # Check for loading indicators
             start_time = time.time()
@@ -864,14 +864,24 @@ class AtriaDataExtractor:
                         By.XPATH, "//*[contains(text(), 'Loading') or contains(text(), 'loading')]"
                     )
 
-                    # Also check for Ant Design spin
+                    # Also check for Ant Design spin (but exclude permanent elements)
                     spin_elements = self.driver.find_elements(By.CSS_SELECTOR, ".ant-spin, .loading, [class*='spinner']")
 
                     loading_visible = False
                     for elem in loading_elements + spin_elements:
                         try:
                             if elem.is_displayed():
-                                print(f"[LOAD]   Still loading: {elem.get_attribute('class')[:30] if elem.get_attribute('class') else elem.text[:20]}")
+                                # Get the class name
+                                elem_class = elem.get_attribute('class') or ''
+                                elem_text = elem.text[:30] if elem.text else ''
+
+                                # IMPORTANT: Exclude permanent AG Grid elements that are not loaders
+                                # ag-aria-description-container is a permanent accessibility element
+                                if 'ag-aria-description-container' in elem_class:
+                                    continue  # Skip this, it's not a loading indicator
+
+                                # If we get here, it's a real loading indicator
+                                print(f"[LOAD]   Still loading: {elem_class[:40] if elem_class else elem_text}")
                                 loading_visible = True
                                 break
                         except:
@@ -879,7 +889,7 @@ class AtriaDataExtractor:
 
                     if not loading_visible:
                         print("[LOAD] Data loaded successfully")
-                        time.sleep(2)  # Extra wait for rendering
+                        time.sleep(1)  # Extra wait for rendering (reduced from 2 to 1)
                         return True
 
                     time.sleep(1)
@@ -892,6 +902,485 @@ class AtriaDataExtractor:
         except Exception as e:
             print(f"[LOAD] Error waiting for load: {e}")
             return True
+
+    def _extract_card_data(self):
+        """
+        Extract data from card-based layout.
+        This is used when data is displayed as cards instead of a grid/table.
+
+        Returns:
+            list: List of dictionaries containing row data
+        """
+        print("[CARD] Extracting data from card layout...")
+        table_data = []
+
+        try:
+            time.sleep(2)
+
+            # Look for card containers
+            # Try different card container selectors
+            card_selectors = [
+                ".card",
+                ".data-card",
+                "[class*='card']",
+                ".ag-center-cols-container > div",  # AG Grid card mode
+                ".ag-row",  # AG Grid rows (might be cards)
+            ]
+
+            cards = []
+            for selector in card_selectors:
+                try:
+                    found_cards = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if found_cards:
+                        print(f"[CARD] Found {len(found_cards)} elements with selector '{selector}'")
+                        # Filter for displayed cards
+                        cards = [c for c in found_cards if c.is_displayed()]
+                        if cards:
+                            print(f"[CARD] Using {len(cards)} visible cards from '{selector}'")
+                            break
+                except Exception as e:
+                    print(f"[CARD] Selector '{selector}' failed: {e}")
+                    continue
+
+            if not cards:
+                print("[CARD] No cards found")
+                return []
+
+            print(f"[CARD] Processing {len(cards)} cards...")
+
+            for card_idx, card in enumerate(cards[:50]):  # Limit to first 50 cards
+                try:
+                    # Extract all text from the card
+                    card_text = card.text.strip()
+
+                    if not card_text:
+                        continue
+
+                    # Try to find URL (anchor tag)
+                    landing_page = ""
+                    try:
+                        anchor = card.find_element(By.CSS_SELECTOR, "a[href]")
+                        href = anchor.get_attribute("href")
+                        landing_page = href if href else anchor.text.strip()
+                    except:
+                        # Try to extract URL from text
+                        lines = card_text.split('\n')
+                        for line in lines:
+                            if 'http' in line.lower() or '.com' in line.lower() or '.de' in line.lower():
+                                landing_page = line.strip()
+                                break
+
+                    # Try to find ROAS value (number, possibly with decimal)
+                    roas = ""
+                    try:
+                        # Look for elements with ROAS-related text
+                        import re
+                        # Find numbers in the card text (ROAS, Spend, etc.)
+                        numbers = re.findall(r'\d+\.?\d*', card_text)
+                        if numbers:
+                            # ROAS is typically a decimal number (e.g., 2.12)
+                            for num in numbers:
+                                if '.' in num and float(num) < 100:  # ROAS is usually < 100
+                                    roas = num
+                                    break
+                            if not roas and numbers:
+                                roas = numbers[0]  # Fallback to first number
+                    except:
+                        pass
+
+                    # Create row data
+                    row_data = {
+                        "Landing page": landing_page,
+                        "ROAS": roas,
+                        "Card Text": card_text[:100]  # Store first 100 chars for debugging
+                    }
+
+                    # Debug first few cards
+                    if card_idx < 5:
+                        print(f"[CARD] Card {card_idx}:")
+                        print(f"[CARD]   Landing page: {landing_page[:60] if landing_page else '(not found)'}")
+                        print(f"[CARD]   ROAS: {roas}")
+                        print(f"[CARD]   Text preview: {card_text[:80].replace(chr(10), ' ')}")
+
+                    # Only add if we found meaningful data
+                    if landing_page or roas:
+                        table_data.append(row_data)
+
+                except Exception as e:
+                    print(f"[CARD] Card {card_idx} error: {e}")
+                    continue
+
+            print(f"[CARD] Successfully extracted {len(table_data)} cards")
+
+        except Exception as e:
+            print(f"[CARD] Error extracting card data: {e}")
+            import traceback
+            traceback.print_exc()
+
+        return table_data
+
+    def _extract_ag_grid_data(self):
+        """
+        Extract data from AG Grid component.
+
+        Returns:
+            list: List of dictionaries containing row data
+        """
+        print("[AG-GRID] Extracting data from AG Grid...")
+        table_data = []
+
+        try:
+            time.sleep(2)
+
+            # First, scroll to the grid to ensure it's visible
+            try:
+                ag_grid = self.driver.find_element(By.CSS_SELECTOR, ".ag-root")
+                print("[AG-GRID] Scrolling to grid...")
+                self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", ag_grid)
+                time.sleep(2)
+            except Exception as e:
+                print(f"[AG-GRID] Scroll error (continuing anyway): {e}")
+
+            # Skip Custom columns button - all columns are already visible in the grid
+            print("[AG-GRID] Skipping Custom columns button (all columns already visible)")
+
+            # Scroll down within the grid to load all rows (AG Grid uses virtual scrolling)
+            print("[AG-GRID] Scrolling grid to load all rows...")
+            try:
+                # Find the grid body container
+                grid_body = self.driver.find_element(By.CSS_SELECTOR, ".ag-body-viewport")
+                # Scroll to bottom to trigger loading of all rows
+                self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight;", grid_body)
+                time.sleep(1)
+                # Scroll back to top
+                self.driver.execute_script("arguments[0].scrollTop = 0;", grid_body)
+                time.sleep(1)
+            except Exception as e:
+                print(f"[AG-GRID] Grid scroll error (continuing anyway): {e}")
+
+            # Scroll horizontally to load all columns (AG Grid uses virtual column scrolling)
+            print("[AG-GRID] Scrolling grid horizontally to load all columns...")
+            try:
+                # Find horizontal scroll containers
+                h_scroll_viewport = self.driver.find_element(By.CSS_SELECTOR, ".ag-body-horizontal-scroll-viewport")
+                # Scroll to the right to reveal all columns
+                self.driver.execute_script("arguments[0].scrollLeft = arguments[0].scrollWidth;", h_scroll_viewport)
+                time.sleep(1)
+                # Scroll back to left
+                self.driver.execute_script("arguments[0].scrollLeft = 0;", h_scroll_viewport)
+                time.sleep(1)
+                print("[AG-GRID] Horizontal scroll completed")
+            except Exception as e:
+                print(f"[AG-GRID] Horizontal scroll error (continuing anyway): {e}")
+
+            # Extract headers from AG Grid (including hidden/collapsed ones)
+            headers = []
+            header_positions = []  # Track which positions have headers (for checkbox columns)
+            print("[AG-GRID] Extracting headers...")
+            try:
+                # Get ALL header cells including hidden ones
+                all_header_cells = self.driver.find_elements(By.CSS_SELECTOR, ".ag-header-cell")
+                print(f"[AG-GRID] Found {len(all_header_cells)} total header cells")
+
+                # Also try to get headers from all column containers
+                left_headers = self.driver.find_elements(By.CSS_SELECTOR, ".ag-pinned-left-header .ag-header-cell")
+                center_headers = self.driver.find_elements(By.CSS_SELECTOR, ".ag-header-container .ag-header-cell")
+                right_headers = self.driver.find_elements(By.CSS_SELECTOR, ".ag-pinned-right-header .ag-header-cell")
+
+                # Combine all headers (left + center + right)
+                combined_headers = left_headers + center_headers + right_headers
+                if len(combined_headers) > len(all_header_cells):
+                    all_header_cells = combined_headers
+                    print(f"[AG-GRID] Using combined headers: {len(left_headers)} left + {len(center_headers)} center + {len(right_headers)} right = {len(combined_headers)} total")
+
+                for idx, cell in enumerate(all_header_cells):
+                    try:
+                        # Extract header text even if not displayed (for hidden columns)
+                        header_text = ""
+                        try:
+                            # Try .ag-header-cell-text
+                            text_elem = cell.find_element(By.CSS_SELECTOR, ".ag-header-cell-text")
+                            header_text = text_elem.text.strip()
+                        except:
+                            # Fallback to cell text
+                            header_text = cell.text.strip()
+
+                        # Also try col-id attribute as fallback
+                        if not header_text:
+                            col_id = cell.get_attribute('col-id')
+                            if col_id and col_id not in ['selection', 'ag-Grid-AutoColumn']:
+                                header_text = col_id.replace('_', ' ').title()
+
+                        if header_text:
+                            headers.append(header_text)
+                            header_positions.append(idx)
+                            is_displayed = cell.is_displayed()
+                            print(f"[AG-GRID]   Header {idx}: '{header_text}' (displayed={is_displayed})")
+                        else:
+                            print(f"[AG-GRID]   Header {idx}: (empty - likely checkbox)")
+                    except Exception as e:
+                        print(f"[AG-GRID]   Header {idx} error: {e}")
+                        continue
+            except Exception as e:
+                print(f"[AG-GRID] Header extraction error: {e}")
+
+            # If no headers found, use known Atria column order
+            if not headers or len(headers) < 5:
+                print("[AG-GRID] Using KNOWN Atria column order")
+                headers = [
+                    "Landing page",
+                    "ROAS",
+                    "Spend",
+                    # Add other expected columns as needed
+                ]
+
+            print(f"\n[AG-GRID] HEADERS ({len(headers)}): {headers}")
+
+            # Check for expected columns
+            expected_columns = [
+                'Landing page', 'ROAS', 'Spend', 'Link clicks', 'ATC',
+                'Checkouts Initiated', 'Purchases', 'AOV', 'CPM',
+                'Landing page views', 'CPC (link click)', 'CTR (link click)'
+            ]
+            missing_columns = []
+            for expected in expected_columns:
+                # Check if any header contains the expected column name (case insensitive, partial match)
+                found = any(expected.lower() in h.lower() for h in headers)
+                if not found:
+                    missing_columns.append(expected)
+
+            if missing_columns:
+                print(f"\n" + "!" * 80)
+                print(f"[AG-GRID] ⚠ WARNING: MISSING {len(missing_columns)} EXPECTED COLUMNS")
+                print(f"!" * 80)
+                for col in missing_columns:
+                    print(f"[AG-GRID]   ✗ {col}")
+                print(f"!" * 80)
+                print(f"[AG-GRID] ACTION REQUIRED:")
+                print(f"[AG-GRID]   1. In Atria, click 'Custom columns' (or column settings icon)")
+                print(f"[AG-GRID]   2. Enable these metrics: {', '.join(missing_columns[:5])}")
+                if len(missing_columns) > 5:
+                    print(f"[AG-GRID]      and {', '.join(missing_columns[5:])}")
+                print(f"[AG-GRID]   3. Click 'Apply' or 'Save'")
+                print(f"[AG-GRID]   4. Re-run this automation")
+                print(f"!" * 80 + "\n")
+
+            # Extract rows from AG Grid
+            print("[AG-GRID] Extracting data rows...")
+            try:
+                # AG Grid uses multiple column containers
+                # Get row index from one container, then find matching cells in all containers
+                left_rows = self.driver.find_elements(By.CSS_SELECTOR, ".ag-pinned-left-cols-container .ag-row")
+                center_rows = self.driver.find_elements(By.CSS_SELECTOR, ".ag-center-cols-container .ag-row")
+
+                # Use whichever has more rows
+                if len(center_rows) > len(left_rows):
+                    rows = center_rows
+                    print(f"[AG-GRID] Found {len(rows)} rows in center container")
+                else:
+                    rows = left_rows
+                    print(f"[AG-GRID] Found {len(rows)} rows in left container")
+
+                # If no rows in either, try the old way
+                if not rows:
+                    rows = self.driver.find_elements(By.CSS_SELECTOR, ".ag-row")
+                    print(f"[AG-GRID] Found {len(rows)} rows (fallback)")
+
+                for row_idx, row in enumerate(rows):
+                    try:
+                        if not row.is_displayed():
+                            continue
+
+                        # Get the row-index attribute to match cells across containers
+                        row_index_attr = row.get_attribute("row-index")
+
+                        # Collect all cells for this row from ALL column containers
+                        cells = []
+
+                        # Strategy 1: Use row-index to find matching cells in all containers
+                        if row_index_attr:
+                            try:
+                                # Debug: For first row, check what containers exist
+                                if row_idx == 0:
+                                    containers = []
+                                    if self.driver.find_elements(By.CSS_SELECTOR, ".ag-pinned-left-cols-container"):
+                                        containers.append("left")
+                                    if self.driver.find_elements(By.CSS_SELECTOR, ".ag-center-cols-container"):
+                                        containers.append("center")
+                                    if self.driver.find_elements(By.CSS_SELECTOR, ".ag-pinned-right-cols-container"):
+                                        containers.append("right")
+                                    print(f"[AG-GRID] Available containers: {containers}")
+
+                                # Find cells in pinned-left container
+                                left_cells = self.driver.find_elements(
+                                    By.CSS_SELECTOR,
+                                    f".ag-pinned-left-cols-container .ag-row[row-index='{row_index_attr}'] .ag-cell"
+                                )
+                                # Find cells in center container
+                                center_cells = self.driver.find_elements(
+                                    By.CSS_SELECTOR,
+                                    f".ag-center-cols-container .ag-row[row-index='{row_index_attr}'] .ag-cell"
+                                )
+                                # Find cells in pinned-right container (if exists)
+                                right_cells = self.driver.find_elements(
+                                    By.CSS_SELECTOR,
+                                    f".ag-pinned-right-cols-container .ag-row[row-index='{row_index_attr}'] .ag-cell"
+                                )
+
+                                # Combine all cells
+                                cells = left_cells + center_cells + right_cells
+
+                                if row_idx == 0:
+                                    print(f"[AG-GRID] Strategy 1: found {len(left_cells)} left + {len(center_cells)} center + {len(right_cells)} right = {len(cells)} total cells")
+                                    if len(center_cells) == 0:
+                                        print(f"[AG-GRID] WARNING: Center container has 0 cells! Trying broader selector...")
+                                        # Try without the row-index filter
+                                        try:
+                                            center_all = self.driver.find_elements(By.CSS_SELECTOR, ".ag-center-cols-container .ag-cell")
+                                            print(f"[AG-GRID]          Found {len(center_all)} total cells in center container (all rows)")
+                                        except:
+                                            pass
+                            except Exception as e:
+                                if row_idx == 0:
+                                    print(f"[AG-GRID] Strategy 1 error: {e}")
+
+                        # Strategy 2: If we only found 2 cells, try finding ALL cells with this row-index across entire grid
+                        if len(cells) <= 2:
+                            if row_idx == 0:
+                                print(f"[AG-GRID] Strategy 1 found only {len(cells)} cells, trying Strategy 2 (XPath with row-index)...")
+                            try:
+                                # Find all cells anywhere in grid with this row-index
+                                xpath = f"//div[@row-index='{row_index_attr}']//div[contains(@class, 'ag-cell') and @col-id]"
+                                all_cells = self.driver.find_elements(By.XPATH, xpath)
+                                if len(all_cells) > len(cells):
+                                    cells = all_cells
+                                    if row_idx == 0:
+                                        print(f"[AG-GRID] Strategy 2: found {len(cells)} cells via XPath")
+                            except Exception as e:
+                                if row_idx == 0:
+                                    print(f"[AG-GRID] Strategy 2 error: {e}")
+
+                        # Strategy 3: Find cells by matching Y-position (same vertical position = same row)
+                        if len(cells) <= 2:
+                            if row_idx == 0:
+                                print(f"[AG-GRID] Strategy 2 found only {len(cells)} cells, trying Strategy 3 (Y-position matching)...")
+                            try:
+                                # Get all cells in grid
+                                all_cells_in_grid = self.driver.find_elements(By.CSS_SELECTOR, ".ag-cell[col-id]")
+                                # Get Y position of current row
+                                row_y = row.location['y']
+                                # Filter cells that are at the same Y position (±5px tolerance)
+                                matching_cells = []
+                                for cell in all_cells_in_grid:
+                                    try:
+                                        cell_y = cell.location['y']
+                                        if abs(cell_y - row_y) < 5:  # Same row if Y position is within 5px
+                                            matching_cells.append(cell)
+                                    except:
+                                        continue
+
+                                if len(matching_cells) > len(cells):
+                                    cells = matching_cells
+                                    if row_idx == 0:
+                                        print(f"[AG-GRID] Strategy 3: found {len(cells)} cells by Y-position at y={row_y}")
+                            except Exception as e:
+                                if row_idx == 0:
+                                    print(f"[AG-GRID] Strategy 3 error: {e}")
+
+                        if not cells:
+                            print(f"[AG-GRID] Row {row_idx}: no cells found")
+                            continue
+
+                        if row_idx == 0:
+                            print(f"[AG-GRID] First row has {len(cells)} cells total")
+                            # Debug: show col-id of all cells
+                            for ci, c in enumerate(cells):
+                                col_id = c.get_attribute('col-id') or 'N/A'
+                                text_preview = c.text.strip()[:30] if c.text else '(empty)'
+                                print(f"[AG-GRID]   Cell {ci}: col-id='{col_id}', text='{text_preview}'")
+
+                            # Check if cells match headers
+                            total_headers = len(headers) + (header_positions[0] if header_positions else 0)
+                            if len(cells) < total_headers:
+                                print(f"[AG-GRID] WARNING: Cell count ({len(cells)}) is less than expected ({total_headers})")
+                                print(f"[AG-GRID]          Missing {total_headers - len(cells)} columns in the data.")
+
+                        row_data = {}
+
+                        # Determine if we need to skip the first cell (checkbox column)
+                        # If we have header_positions and the first one is > 0, skip cells before it
+                        cell_offset = 0
+                        if header_positions and header_positions[0] > 0:
+                            cell_offset = header_positions[0]
+                            if row_idx == 0:
+                                print(f"[AG-GRID] Skipping first {cell_offset} cells (checkbox columns)")
+
+                        for cell_idx, cell in enumerate(cells[cell_offset:]):
+                            try:
+                                # Map cell index to header index
+                                header_idx = cell_idx
+                                if header_idx >= len(headers):
+                                    if row_idx == 0:
+                                        print(f"[AG-GRID] Row {row_idx}, Cell {cell_idx}: exceeded header count ({len(headers)} headers)")
+                                    break
+
+                                header = headers[header_idx]
+                                cell_text = ""
+
+                                # Special handling for Landing page column (URL)
+                                if 'landing page' in header.lower() and cell_idx == 0:
+                                    # Try to extract URL from anchor tag
+                                    try:
+                                        anchor = cell.find_element(By.CSS_SELECTOR, "a")
+                                        href = anchor.get_attribute("href")
+                                        if href:
+                                            cell_text = href
+                                        else:
+                                            cell_text = anchor.text.strip()
+                                    except:
+                                        # No anchor, get text
+                                        cell_text = cell.text.strip()
+
+                                    # Clean up - remove "Used in X ads" text
+                                    if cell_text and "Used in" in cell_text:
+                                        cell_text = cell_text.split("Used in")[0].strip()
+                                    if cell_text and "\n" in cell_text:
+                                        cell_text = cell_text.split("\n")[0].strip()
+                                else:
+                                    # Regular cell
+                                    cell_text = cell.text.strip()
+
+                                row_data[header] = cell_text
+
+                                # Debug first row
+                                if row_idx < 2:
+                                    print(f"[AG-GRID]   Row {row_idx}, Cell {cell_idx} ({header}): '{cell_text[:50] if cell_text else '(empty)'}'")
+
+                            except Exception as e:
+                                print(f"[AG-GRID] Row {row_idx}, Cell {cell_idx} error: {e}")
+                                continue
+
+                        # Only add row if it has data
+                        if row_data and any(v for v in row_data.values()):
+                            table_data.append(row_data)
+
+                    except Exception as e:
+                        print(f"[AG-GRID] Row {row_idx} extraction error: {e}")
+                        continue
+
+                print(f"[AG-GRID] Successfully extracted {len(table_data)} rows")
+
+            except Exception as e:
+                print(f"[AG-GRID] Row extraction error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        except Exception as e:
+            print(f"[AG-GRID] Error extracting AG Grid data: {e}")
+            import traceback
+            traceback.print_exc()
+
+        return table_data
 
     def extract_table_data(self):
         """
@@ -907,6 +1396,14 @@ class AtriaDataExtractor:
         try:
             time.sleep(3)
 
+            # Scroll down the page to ensure data grid is visible (it's below the calendar)
+            print("[TABLE] Scrolling page down to reveal data grid...")
+            try:
+                self.driver.execute_script("window.scrollTo(0, 500);")
+                time.sleep(2)
+            except Exception as e:
+                print(f"[TABLE] Page scroll error (continuing anyway): {e}")
+
             # Find the table element
             table = None
 
@@ -920,6 +1417,10 @@ class AtriaDataExtractor:
                 ("XPATH", "//div[contains(@class, 'table')]//table"),
             ]
 
+            # Check ALL tables and score them to find the best one
+            best_table = None
+            best_score = 0
+
             for selector_type, selector in table_selectors:
                 try:
                     if selector_type == "CSS":
@@ -928,19 +1429,132 @@ class AtriaDataExtractor:
                         tables = self.driver.find_elements(By.XPATH, selector)
 
                     print(f"[TABLE] Selector '{selector}': found {len(tables)} tables")
-                    for t in tables:
-                        if t.is_displayed():
-                            table = t
-                            print(f"[TABLE] Using table with tag: {t.tag_name}")
-                            break
-                    if table:
+
+                    for i, t in enumerate(tables):
+                        try:
+                            # Check table quality
+                            rows = t.find_elements(By.CSS_SELECTOR, "tr")
+                            is_displayed = t.is_displayed()
+
+                            # Check headers
+                            has_headers = False
+                            header_count = 0
+                            try:
+                                thead = t.find_element(By.CSS_SELECTOR, "thead")
+                                header_cells = thead.find_elements(By.CSS_SELECTOR, "th")
+                                # Count non-empty headers
+                                for hc in header_cells:
+                                    if hc.text.strip():
+                                        header_count += 1
+                                has_headers = header_count > 2
+                            except:
+                                pass
+
+                            # Check tbody
+                            has_tbody = False
+                            tbody_rows = 0
+                            try:
+                                tbody = t.find_element(By.CSS_SELECTOR, "tbody")
+                                tbody_rows = len(tbody.find_elements(By.CSS_SELECTOR, "tr"))
+                                has_tbody = tbody_rows > 0
+                            except:
+                                pass
+
+                            # Score the table
+                            score = 0
+                            if len(rows) > 5:  # More rows = better
+                                score += len(rows)
+                            if has_headers:
+                                score += 50  # Bonus for having headers
+                            if header_count > 5:
+                                score += header_count * 10  # More headers = better
+                            if has_tbody:
+                                score += 20
+                            if tbody_rows > 3:
+                                score += tbody_rows * 2
+
+                            # Debug: show first few cells of first row
+                            first_row_preview = ""
+                            try:
+                                if tbody_rows > 0:
+                                    first_row = tbody.find_element(By.CSS_SELECTOR, "tr")
+                                    first_cells = first_row.find_elements(By.CSS_SELECTOR, "td")
+                                    cell_texts = [c.text.strip()[:20] for c in first_cells[:3]]
+                                    first_row_preview = " | ".join(cell_texts)
+                            except:
+                                pass
+
+                            print(f"[TABLE]   Table {i}: rows={len(rows)}, headers={header_count}, tbody_rows={tbody_rows}, score={score}, preview='{first_row_preview}'")
+
+                            # Update best table if this one is better
+                            if score > best_score and len(rows) > 1:
+                                best_score = score
+                                best_table = t
+                                print(f"[TABLE]   -> New best table (score={score})")
+
+                        except Exception as e:
+                            print(f"[TABLE]   Table {i} check error: {e}")
+                            continue
+
+                    # If we found a good table (score > 10), use it
+                    if best_table and best_score > 10:
+                        table = best_table
+                        print(f"[TABLE] Selected best table with score {best_score}")
                         break
+
                 except Exception as e:
                     print(f"[TABLE] Selector '{selector}' failed: {e}")
                     continue
 
+            # If we found a table but it has a low score, try AG Grid first
+            if table and best_score < 50:
+                print(f"[TABLE] Found table but quality is low (score={best_score}), trying AG Grid first...")
+                try:
+                    ag_grid = self.driver.find_element(By.CSS_SELECTOR, ".ag-root")
+                    if ag_grid and ag_grid.is_displayed():
+                        print("[TABLE] Found AG Grid, using it instead of low-quality table")
+                        ag_data = self._extract_ag_grid_data()
+                        if ag_data and len(ag_data) > 0:
+                            return ag_data
+                        else:
+                            print("[TABLE] AG Grid returned no data, falling back to table")
+                except Exception as e:
+                    print(f"[TABLE] AG Grid attempt failed: {e}, falling back to table")
+
+            # If we found a table, scroll to it to ensure it's visible
+            if table:
+                try:
+                    print("[TABLE] Scrolling to table...")
+                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", table)
+                    time.sleep(2)
+                except Exception as e:
+                    print(f"[TABLE] Scroll error (continuing anyway): {e}")
+
             if not table:
-                print("[TABLE] ERROR: Could not find table element")
+                print("[TABLE] Standard table not found, checking for AG Grid...")
+                # Try AG Grid extraction
+                try:
+                    ag_grid = self.driver.find_element(By.CSS_SELECTOR, ".ag-root")
+                    if ag_grid and ag_grid.is_displayed():
+                        print("[TABLE] Found AG Grid, extracting data...")
+                        ag_data = self._extract_ag_grid_data()
+                        if ag_data:
+                            return ag_data
+                        else:
+                            print("[TABLE] AG Grid extraction returned no data, trying card-based extraction...")
+                except Exception as e:
+                    print(f"[TABLE] AG Grid extraction failed: {e}")
+
+                # Try card-based extraction as fallback
+                print("[TABLE] Checking for card-based layout...")
+                try:
+                    card_data = self._extract_card_data()
+                    if card_data:
+                        return card_data
+                except Exception as e:
+                    print(f"[TABLE] Card extraction failed: {e}")
+
+                print("[TABLE] ERROR: Could not find table, AG Grid, or card-based data")
                 # Debug: show what's on the page
                 print("[TABLE] Debug - looking for any table-like elements...")
                 try:

@@ -279,7 +279,8 @@ class AtriaDataExtractor:
 
                             print(f"[CALENDAR]   Cell {i}: text='{cell_text}', x={cell_x}, disabled={is_disabled}, other_month={is_other_month}, in_left={cell_x < mid_x}")
 
-                            if not is_disabled:
+                            # IMPORTANT: Skip cells from other months AND disabled cells
+                            if not is_disabled and not is_other_month:
                                 target_cells.append({
                                     'element': cell,
                                     'x': cell_x,

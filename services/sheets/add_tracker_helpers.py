@@ -289,11 +289,18 @@ def find_date_row(worksheet, date_obj: datetime, header_row: int) -> Optional[in
     """
     try:
         day = date_obj.day
+        year = date_obj.year
         month_full = date_obj.strftime('%B')   # "December"
         month_short = date_obj.strftime('%b')  # "Dec"
 
         # Format date in multiple ways for matching
-        date_formats = [
+        # Year-inclusive formats checked first to avoid matching wrong year
+        date_formats_with_year = [
+            f"{day:02d}/{month_full}/{year}",     # "05/December/2026" (unlikely but safe)
+            f"{day}/{str(year)[2:]}",              # partial for dd/mm/yy
+        ]
+
+        date_formats_no_year = [
             f"{day} {month_full}",           # "15 December" or "5 December"
             f"{day:02d} {month_full}",       # "05 December" (with leading zero)
             f"{month_full} {day}",           # "December 15"
@@ -301,15 +308,40 @@ def find_date_row(worksheet, date_obj: datetime, header_row: int) -> Optional[in
             f"{day:02d} {month_short}",      # "05 Dec"
         ]
 
-        print(f"    Looking for date formats: {date_formats}")
+        # Date strings that represent the target date with year (for Google Sheets date cells)
+        # Google Sheets may return dates as dd/mm/yyyy or mm/dd/yyyy depending on locale
+        date_serial_formats = [
+            f"{day:02d}/{date_obj.month:02d}/{year}",   # "19/02/2026" (DD/MM/YYYY)
+            f"{date_obj.month:02d}/{day:02d}/{year}",   # "02/19/2026" (MM/DD/YYYY)
+            f"{year}-{date_obj.month:02d}-{day:02d}",   # "2026-02-19" (ISO)
+        ]
+
+        print(f"    Looking for date (with year {year}): day={day}, month={month_full}")
 
         # Get ALL values from column A (dates can be far down like row 338+)
         date_column = worksheet.col_values(1)
         print(f"    Searching {len(date_column)} rows in column A")
 
+        # First pass: try to match dates WITH year to avoid wrong-year matches
         for row_idx, cell_value in enumerate(date_column, start=1):
             if row_idx <= header_row:
-                continue  # Skip header and above
+                continue
+
+            cell_str = str(cell_value).strip()
+            if not cell_str:
+                continue
+
+            # Check if cell is a full date value (dd/mm/yyyy etc.)
+            if cell_str in date_serial_formats:
+                print(f"    Date '{cell_str}' (exact date with year) found at row {row_idx}")
+                return row_idx
+
+        # Second pass: match day+month text, but verify year if cell is a date
+        # Collect ALL matching rows first, then pick the best one
+        candidates = []
+        for row_idx, cell_value in enumerate(date_column, start=1):
+            if row_idx <= header_row:
+                continue
 
             cell_str = str(cell_value).strip()
             if not cell_str:
@@ -317,10 +349,24 @@ def find_date_row(worksheet, date_obj: datetime, header_row: int) -> Optional[in
 
             cell_lower = cell_str.lower()
 
-            for date_fmt in date_formats:
+            for date_fmt in date_formats_no_year:
                 if date_fmt.lower() == cell_lower or cell_lower.startswith(date_fmt.lower()):
-                    print(f"    Date '{cell_str}' found at row {row_idx}")
-                    return row_idx
+                    candidates.append((row_idx, cell_str))
+                    break
+
+        if len(candidates) == 1:
+            row_idx, cell_str = candidates[0]
+            print(f"    Date '{cell_str}' found at row {row_idx}")
+            return row_idx
+        elif len(candidates) > 1:
+            # Multiple matches (same day+month in different years)
+            # Pick the LAST one as it's most likely the current year
+            row_idx, cell_str = candidates[-1]
+            print(f"    WARNING: Found {len(candidates)} matching dates (likely different years)")
+            for r, c in candidates:
+                print(f"      Row {r}: '{c}'")
+            print(f"    Selecting LAST match (most recent year): row {row_idx} '{cell_str}'")
+            return row_idx
 
         print(f"    Date not found in any row")
         return None

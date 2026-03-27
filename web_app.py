@@ -593,6 +593,54 @@ def get_previous_day():
     return jsonify({'date': date_obj.strftime("%d-%b-%Y")})
 
 
+@app.route('/api/setup-browser', methods=['POST'])
+def setup_browser():
+    """Open a visible Chrome browser with the same profile for manual login setup."""
+    from browser_manager import BrowserManager
+    import time as _time
+
+    data = request.json or {}
+    urls = data.get('urls', [
+        'https://lookerstudio.google.com',
+        'https://app.runconverge.com',
+        'https://app.atriaanalytics.com',
+    ])
+
+    def _open_browser():
+        try:
+            socketio.emit('task_output', {'data': 'Opening visible browser for login setup...\n'})
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=False)
+
+            # Navigate to the first URL so user can start logging in
+            if urls:
+                driver.get(urls[0])
+                socketio.emit('task_output', {
+                    'data': f'Browser opened. Navigate to these sites and login:\n'
+                })
+                for u in urls:
+                    socketio.emit('task_output', {'data': f'  - {u}\n'})
+                socketio.emit('task_output', {
+                    'data': '\nSession cookies will be saved automatically.\n'
+                           'Close the browser when done.\n'
+                })
+
+            # Wait until browser is closed by user
+            try:
+                while True:
+                    _ = driver.title
+                    _time.sleep(2)
+            except Exception:
+                pass  # Browser was closed
+
+            socketio.emit('task_output', {'data': 'Setup browser closed. Sessions saved.\n'})
+        except Exception as e:
+            socketio.emit('task_output', {'data': f'Error opening browser: {e}\n'})
+
+    threading.Thread(target=_open_browser, daemon=True).start()
+    return jsonify({'success': True, 'message': 'Opening setup browser...'})
+
+
 # ============================================================================
 # WebSocket Events
 # ============================================================================

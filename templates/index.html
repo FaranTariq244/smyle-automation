@@ -844,7 +844,7 @@
                     <div class="form-row cols-2">
                         <div class="form-group" style="margin-bottom:0;">
                             <label class="form-label">Date (DD-MMM-YYYY)</label>
-                            <input type="text" id="date-input" class="form-input" placeholder="e.g., 09-Oct-2025">
+                            <input type="date" id="date-input" class="form-input" onclick="this.showPicker()" style="cursor:pointer;">
                         </div>
                     </div>
                 </div>
@@ -884,6 +884,10 @@
                         <button class="action-btn" id="btn-run-scheduled" onclick="runScheduleNow()">
                             <span class="action-label">Run Scheduled</span>
                             <span class="action-desc">Trigger schedule now</span>
+                        </button>
+                        <button class="action-btn" id="btn-setup-browser" onclick="setupBrowser()" style="border-color: var(--warning); color: var(--warning);">
+                            <span class="action-label">Setup Browser</span>
+                            <span class="action-desc">Login to all services</span>
                         </button>
                     </div>
                 </div>
@@ -957,8 +961,8 @@
 
                     <div class="form-row cols-3" style="margin-top: 16px;">
                         <div class="form-group" style="margin-bottom:0;">
-                            <label class="form-label">Start date (YYYY-MM-DD)</label>
-                            <input type="text" id="schedule-start" class="form-input">
+                            <label class="form-label">Start date</label>
+                            <input type="date" id="schedule-start" class="form-input" onclick="this.showPicker()" style="cursor:pointer;">
                         </div>
                         <div class="form-group" style="margin-bottom:0;">
                             <label class="form-label">Run data for days ago</label>
@@ -1199,11 +1203,29 @@
         }
 
         // API calls
+        function dateToNative(ddMmmYyyy) {
+            // Convert "18-Mar-2026" to "2026-03-18" for input[type=date]
+            const months = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+            const parts = ddMmmYyyy.split('-');
+            if (parts.length === 3 && months[parts[1]]) {
+                return parts[2] + '-' + months[parts[1]] + '-' + parts[0];
+            }
+            return '';
+        }
+
+        function nativeToDate(yyyy_mm_dd) {
+            // Convert "2026-03-18" to "18-Mar-2026" for backend
+            if (!yyyy_mm_dd) return '';
+            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            const [y, m, d] = yyyy_mm_dd.split('-');
+            return d + '-' + months[parseInt(m, 10) - 1] + '-' + y;
+        }
+
         async function fillPreviousDay() {
             try {
                 const response = await fetch('/api/previous-day');
                 const data = await response.json();
-                document.getElementById('date-input').value = data.date;
+                document.getElementById('date-input').value = dateToNative(data.date);
             } catch (error) {
                 showToast('Failed to get previous day', 'error');
             }
@@ -1215,7 +1237,7 @@
                 return;
             }
 
-            const dateInput = document.getElementById('date-input').value;
+            const dateInput = nativeToDate(document.getElementById('date-input').value);
 
             try {
                 const response = await fetch('/api/run', {
@@ -1268,6 +1290,25 @@
                 }
             } catch (error) {
                 showToast('Failed to trigger schedule', 'error');
+            }
+        }
+
+        async function setupBrowser() {
+            try {
+                const response = await fetch('/api/setup-browser', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Opening browser for login setup...', 'success');
+                } else {
+                    showToast(data.error || 'Failed to open browser', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to open setup browser', 'error');
             }
         }
 

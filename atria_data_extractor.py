@@ -1829,8 +1829,22 @@ def run_add_tracker_report(date_obj, date_str):
         print("[2/9] Navigating to Atria report 1...")
         extractor.navigate_to_report(1)
 
-        # Check and wait for login if needed
-        if not extractor.check_and_wait_for_login():
+        # Check if login is needed - restart browser in visible mode if so
+        current_url = driver.current_url.lower()
+        if "login" in current_url or "sign" in current_url or "auth" in current_url:
+            print("\n⚠️  Atria login required - restarting browser in visible mode...")
+            manager.close()
+            time.sleep(2)
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=False)
+            extractor = AtriaDataExtractor(driver)
+            extractor.navigate_to_report(1)
+            time.sleep(3)
+            if not extractor.check_and_wait_for_login():
+                print("Login failed or timed out")
+                manager.close()
+                return False
+        elif not extractor.check_and_wait_for_login():
             print("Login failed or timed out")
             manager.close()
             return False

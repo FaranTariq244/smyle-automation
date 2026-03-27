@@ -83,10 +83,24 @@ def run_daily_report(date_obj, date_str):
 
         # Check if login needed
         if "accounts.google.com" in driver.current_url:
-            print("\n⚠️  Please login in the browser window...")
+            print("\n⚠️  Google login required - restarting browser in visible mode...")
+            manager.close()
+            time.sleep(2)
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=False)
+            driver.get(REPORT_URL)
+            time.sleep(5)
+            print("⚠️  Please login in the browser window...")
             while "accounts.google.com" in driver.current_url:
                 time.sleep(2)
             print("✓ Login successful")
+            # Switch back to headless after login (cookies saved in profile)
+            manager.close()
+            time.sleep(2)
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=True)
+            driver.get(REPORT_URL)
+            time.sleep(5)
 
         extractor = LookerDataExtractor(driver)
 
@@ -172,10 +186,24 @@ def run_order_type_report(date_obj, date_str):
 
         # Check if login needed
         if "accounts.google.com" in driver.current_url:
-            print("\n⚠️  Please login in the browser window...")
+            print("\n⚠️  Google login required - restarting browser in visible mode...")
+            manager.close()
+            time.sleep(2)
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=False)
+            driver.get(ORDER_TYPE_URL)
+            time.sleep(5)
+            print("⚠️  Please login in the browser window...")
             while "accounts.google.com" in driver.current_url:
                 time.sleep(2)
             print("✓ Login successful")
+            # Switch back to headless after login (cookies saved in profile)
+            manager.close()
+            time.sleep(2)
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=True)
+            driver.get(ORDER_TYPE_URL)
+            time.sleep(5)
 
         extractor = order_script.OrderTypeDataExtractor(driver)
 
@@ -207,7 +235,15 @@ def run_order_type_report(date_obj, date_str):
 
         # Check if login needed for Converge
         if "login" in driver.current_url.lower() or "sign" in driver.current_url.lower():
-            print("\n⚠️  Please login to Converge in the browser window...")
+            print("\n⚠️  Converge login required - restarting browser in visible mode...")
+            # Close headless browser and reopen in visible mode for login
+            manager.close()
+            time.sleep(2)
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=False)
+            driver.get(CONVERGE_URL)
+            time.sleep(5)
+            print("⚠️  Please login to Converge in the browser window...")
             while "login" in driver.current_url.lower() or "sign" in driver.current_url.lower():
                 time.sleep(2)
             print("✓ Login successful")

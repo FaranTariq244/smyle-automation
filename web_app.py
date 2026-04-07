@@ -95,25 +95,30 @@ def broadcast_status(status: str, running: bool):
 
 
 def build_subprocess_code(task: str, date_str: str) -> str:
-    """Build inline Python code for the child process to execute."""
+    """Build inline Python code for the child process to execute.
+
+    ``task`` may be a single key ("daily"), comma-separated ("daily,order"),
+    or "all" to run every report.
+    """
     return f"""
 import sys
 from datetime import datetime
 from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report
 date_str = "{date_str}"
 date_obj = datetime.strptime(date_str, "%d-%b-%Y")
+
+tasks = "{task}".split(",")
+run_all = "all" in tasks
+
 try:
-    if "{task}" == "daily":
-        ok = run_daily_report(date_obj, date_str)
-    elif "{task}" == "order":
-        ok = run_order_type_report(date_obj, date_str)
-    elif "{task}" == "addtracker":
-        ok = run_add_tracker_report(date_obj, date_str)
-    else:
-        d_ok = run_daily_report(date_obj, date_str)
-        o_ok = run_order_type_report(date_obj, date_str)
-        a_ok = run_add_tracker_report(date_obj, date_str)
-        ok = d_ok and o_ok and a_ok
+    results = []
+    if run_all or "daily" in tasks:
+        results.append(run_daily_report(date_obj, date_str))
+    if run_all or "order" in tasks:
+        results.append(run_order_type_report(date_obj, date_str))
+    if run_all or "addtracker" in tasks:
+        results.append(run_add_tracker_report(date_obj, date_str))
+    ok = all(results) if results else False
     sys.exit(0 if ok else 1)
 except Exception as exc:
     print(f"Unexpected error: {{exc}}")
@@ -170,12 +175,7 @@ def on_task_complete(task: str, date_str: str, success: bool):
         return
     state._completion_in_progress = True
 
-    task_name = {
-        "all": "All reports",
-        "daily": "Daily Report",
-        "order": "Order Type Report",
-        "addtracker": "Daily Add Tracker",
-    }.get(task, "Automation")
+    task_name = _task_display_name(task)
 
     status = "completed successfully"
     if state.stop_requested:
@@ -270,14 +270,26 @@ def on_schedule_due(schedule: dict) -> bool:
     return True
 
 
-def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: str):
-    """Start a task with a specific date."""
-    task_name = {
+def _task_display_name(task: str) -> str:
+    """Return a human-readable name for a task string (single or comma-separated)."""
+    labels = {
         "all": "All reports",
         "daily": "Daily Report",
         "order": "Order Type Report",
         "addtracker": "Daily Add Tracker",
-    }.get(task, "Automation")
+    }
+    if task in labels:
+        return labels[task]
+    parts = [t.strip() for t in task.split(",") if t.strip()]
+    if len(parts) == 3:
+        return "All reports"
+    named = [labels.get(p, p) for p in parts]
+    return " + ".join(named) if named else "Automation"
+
+
+def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: str):
+    """Start a task with a specific date."""
+    task_name = _task_display_name(task)
 
     origin_label = "Scheduled run" if origin == "scheduled" else "Manual run"
     state.running = True

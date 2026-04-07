@@ -694,6 +694,247 @@
             margin: 20px 0;
         }
 
+        /* ── Schedule Report List Picker ── */
+        .report-list {
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+
+        .report-list::-webkit-scrollbar { width: 5px; }
+        .report-list::-webkit-scrollbar-track { background: transparent; }
+        .report-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        .report-list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .report-list-count {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .report-list-toggle-all {
+            font-size: 11px;
+            color: var(--accent);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            padding: 2px 0;
+        }
+
+        .report-list-toggle-all:hover { text-decoration: underline; }
+
+        .report-list-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            cursor: pointer;
+            transition: background 0.12s;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            user-select: none;
+        }
+
+        .report-list-item:last-child { border-bottom: none; }
+        .report-list-item:hover { background: var(--hover-bg); }
+
+        .report-list-item input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+
+        .report-list-item-text {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .report-list-item-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .report-list-item-desc {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-align: right;
+        }
+
+        /* ── Schedule Config Layout ── */
+        .schedule-config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 14px;
+        }
+
+        @media (max-width: 640px) {
+            .schedule-config-grid { grid-template-columns: 1fr; }
+        }
+
+        .schedule-enable-toggle {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .schedule-enable-toggle:hover {
+            border-color: rgba(52, 211, 153, 0.3);
+        }
+
+        .schedule-enable-toggle.active {
+            border-color: var(--success);
+            background: rgba(52, 211, 153, 0.06);
+        }
+
+        .schedule-enable-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+
+        .schedule-enable-toggle.active .schedule-enable-label {
+            color: var(--success);
+        }
+
+        /* ── Schedule Footer ── */
+        .schedule-footer {
+            display: flex;
+            align-items: stretch;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+
+        .schedule-footer .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .schedule-status-cards {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            min-width: 260px;
+        }
+
+        .schedule-status-card {
+            padding: 14px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .schedule-status-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .schedule-status-icon.next {
+            background: var(--accent-glow);
+            color: var(--accent);
+        }
+
+        .schedule-status-icon.result {
+            background: rgba(52, 211, 153, 0.1);
+            color: var(--success);
+        }
+
+        .schedule-status-info .label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 2px;
+        }
+
+        .schedule-status-info .value {
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+
+        /* ── Schedule Table Enhanced ── */
+        .schedule-table-card .card-header {
+            padding-bottom: 0;
+            margin-bottom: 0;
+            border-bottom: none;
+        }
+
+        .schedule-list-empty {
+            text-align: center;
+            padding: 48px 20px;
+        }
+
+        .schedule-list-empty svg {
+            width: 48px;
+            height: 48px;
+            color: var(--text-muted);
+            opacity: 0.4;
+            margin-bottom: 16px;
+        }
+
+        .schedule-list-empty h3 {
+            color: var(--text-secondary);
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .schedule-list-empty p {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .task-pills {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+
+        .task-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            background: var(--accent-glow);
+            color: var(--accent);
+        }
+
         /* ── Responsive ── */
         @media (max-width: 768px) {
             .sidebar {
@@ -933,16 +1174,42 @@
                         </div>
                     </div>
 
-                    <div class="form-row cols-3">
-                        <div class="form-group" style="margin-bottom:0;">
-                            <label class="form-label">Automation</label>
-                            <select id="schedule-task" class="form-input">
-                                <option value="all">All Reports</option>
-                                <option value="daily">Daily Only</option>
-                                <option value="order">Order Type Only</option>
-                                <option value="addtracker">Daily Add Tracker</option>
-                            </select>
+                    <!-- Report Selection -->
+                    <div style="margin-bottom: 20px;">
+                        <label class="form-label">Reports to run</label>
+                        <div class="report-list">
+                            <div class="report-list-header">
+                                <span class="report-list-count" id="sched-selected-count">3 of 3 selected</span>
+                                <button type="button" class="report-list-toggle-all" onclick="toggleAllReports()">Toggle all</button>
+                            </div>
+                            <div id="report-list-items">
+                                <label class="report-list-item">
+                                    <input type="checkbox" class="sched-report-chk" value="daily" checked onchange="updateReportCount()">
+                                    <div class="report-list-item-text">
+                                        <span class="report-list-item-name">Daily Report</span>
+                                        <span class="report-list-item-desc">Looker Studio daily</span>
+                                    </div>
+                                </label>
+                                <label class="report-list-item">
+                                    <input type="checkbox" class="sched-report-chk" value="order" checked onchange="updateReportCount()">
+                                    <div class="report-list-item-text">
+                                        <span class="report-list-item-name">Order Type</span>
+                                        <span class="report-list-item-desc">Order breakdown</span>
+                                    </div>
+                                </label>
+                                <label class="report-list-item">
+                                    <input type="checkbox" class="sched-report-chk" value="addtracker" checked onchange="updateReportCount()">
+                                    <div class="report-list-item-text">
+                                        <span class="report-list-item-name">Add Tracker</span>
+                                        <span class="report-list-item-desc">Atria landing pages</span>
+                                    </div>
+                                </label>
+                            </div>
                         </div>
+                    </div>
+
+                    <!-- Schedule Settings -->
+                    <div class="schedule-config-grid">
                         <div class="form-group" style="margin-bottom:0;">
                             <label class="form-label">Recurrence</label>
                             <select id="schedule-recurrence" class="form-input">
@@ -955,49 +1222,69 @@
                         </div>
                         <div class="form-group" style="margin-bottom:0;">
                             <label class="form-label">Time of day (HH:MM)</label>
-                            <input type="text" id="schedule-time" class="form-input">
+                            <input type="text" id="schedule-time" class="form-input" placeholder="07:00">
                         </div>
-                    </div>
-
-                    <div class="form-row cols-3" style="margin-top: 16px;">
                         <div class="form-group" style="margin-bottom:0;">
                             <label class="form-label">Start date</label>
                             <input type="date" id="schedule-start" class="form-input" onclick="this.showPicker()" style="cursor:pointer;">
                         </div>
+                    </div>
+
+                    <div class="schedule-config-grid" style="margin-top: 14px;">
                         <div class="form-group" style="margin-bottom:0;">
                             <label class="form-label">Run data for days ago</label>
                             <input type="number" id="schedule-days-ago" class="form-input" value="1" min="0" max="30">
                         </div>
-                        <div class="form-group" style="margin-bottom:0; display: flex; align-items: flex-end;">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="schedule-enabled">
-                                Enable schedule
-                            </label>
+                        <div class="form-group" style="margin-bottom:0; display:flex; align-items:flex-end;">
+                            <div class="schedule-enable-toggle" id="schedule-enable-toggle" onclick="toggleEnableSwitch()">
+                                <label class="toggle" style="pointer-events:none;">
+                                    <input type="checkbox" id="schedule-enabled">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="schedule-enable-label">Enable schedule</span>
+                            </div>
                         </div>
                     </div>
 
                     <div class="divider"></div>
 
-                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                    <!-- Footer with actions + status -->
+                    <div class="schedule-footer">
                         <div class="btn-group">
-                            <button class="btn btn-primary" onclick="saveSchedule()">Save Schedule</button>
-                            <button class="btn btn-secondary" onclick="runScheduleNow()">Run Now</button>
+                            <button class="btn btn-primary" onclick="saveSchedule()" style="min-width: 140px;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
+                                Save Schedule
+                            </button>
+                            <button class="btn btn-secondary" onclick="runScheduleNow()" style="min-width: 140px;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/></svg>
+                                Run Now
+                            </button>
                         </div>
-                        <div class="info-grid" style="flex: 1; min-width: 300px;">
-                            <div class="info-item">
-                                <div class="label">Next run</div>
-                                <div class="value" id="schedule-next-run">Not scheduled</div>
+                        <div class="schedule-status-cards">
+                            <div class="schedule-status-card">
+                                <div class="schedule-status-icon next">
+                                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </div>
+                                <div class="schedule-status-info">
+                                    <div class="label">Next run</div>
+                                    <div class="value" id="schedule-next-run">Not scheduled</div>
+                                </div>
                             </div>
-                            <div class="info-item">
-                                <div class="label">Last result</div>
-                                <div class="value" id="schedule-last-status">No runs yet</div>
+                            <div class="schedule-status-card">
+                                <div class="schedule-status-icon result">
+                                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                </div>
+                                <div class="schedule-status-info">
+                                    <div class="label">Last result</div>
+                                    <div class="value" id="schedule-last-status">No runs yet</div>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- All Schedules -->
-                <div class="card">
+                <div class="card schedule-table-card">
                     <div class="card-header">
                         <div>
                             <div class="card-title">
@@ -1006,7 +1293,10 @@
                             </div>
                             <div class="card-subtitle">View and manage all scheduled automations</div>
                         </div>
-                        <button class="btn btn-secondary btn-sm" onclick="loadAllSchedules()">Refresh</button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadAllSchedules()">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16"/></svg>
+                            Refresh
+                        </button>
                     </div>
 
                     <div class="table-container">
@@ -1014,7 +1304,7 @@
                             <thead>
                                 <tr>
                                     <th>Name</th>
-                                    <th>Task</th>
+                                    <th>Reports</th>
                                     <th>Recurrence</th>
                                     <th>Time</th>
                                     <th>Next Run</th>
@@ -1027,7 +1317,8 @@
                         </table>
                     </div>
 
-                    <div id="schedules-empty" class="empty-state" style="display: none;">
+                    <div id="schedules-empty" class="schedule-list-empty" style="display: none;">
+                        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
                         <h3>No schedules yet</h3>
                         <p>Configure a schedule above to get started.</p>
                     </div>
@@ -1312,7 +1603,59 @@
             }
         }
 
-        // Schedule handling
+        // Schedule handling — multi-select helpers
+        function getReportCheckboxes() {
+            return document.querySelectorAll('.sched-report-chk');
+        }
+
+        function getSelectedTask() {
+            const boxes = getReportCheckboxes();
+            const checked = Array.from(boxes).filter(cb => cb.checked).map(cb => cb.value);
+            if (checked.length === 0) return '';
+            if (checked.length === boxes.length) return 'all';
+            return checked.join(',');
+        }
+
+        function setSelectedTask(taskStr) {
+            const tasks = (taskStr || 'all').split(',').map(t => t.trim());
+            const isAll = tasks.includes('all');
+            getReportCheckboxes().forEach(cb => {
+                cb.checked = isAll || tasks.includes(cb.value);
+            });
+            updateReportCount();
+        }
+
+        function updateReportCount() {
+            const boxes = getReportCheckboxes();
+            const checked = Array.from(boxes).filter(cb => cb.checked).length;
+            document.getElementById('sched-selected-count').textContent = `${checked} of ${boxes.length} selected`;
+        }
+
+        function toggleAllReports() {
+            const boxes = getReportCheckboxes();
+            const allChecked = Array.from(boxes).every(cb => cb.checked);
+            boxes.forEach(cb => cb.checked = !allChecked);
+            updateReportCount();
+        }
+
+        function toggleEnableSwitch() {
+            const cb = document.getElementById('schedule-enabled');
+            cb.checked = !cb.checked;
+            const toggle = document.getElementById('schedule-enable-toggle');
+            toggle.classList.toggle('active', cb.checked);
+        }
+
+        function syncEnableToggleUI() {
+            const cb = document.getElementById('schedule-enabled');
+            document.getElementById('schedule-enable-toggle').classList.toggle('active', cb.checked);
+        }
+
+        function formatTaskDisplay(taskStr) {
+            const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', all: 'All Reports' };
+            if (!taskStr || taskStr === 'all') return '<span class="task-pill">All Reports</span>';
+            return taskStr.split(',').map(t => `<span class="task-pill">${escapeHtml(labels[t.trim()] || t.trim())}</span>`).join('');
+        }
+
         async function refreshScheduleStatus() {
             try {
                 const response = await fetch('/api/schedule');
@@ -1342,8 +1685,9 @@
                 if (data.schedule) {
                     const s = data.schedule;
                     document.getElementById('schedule-enabled').checked = s.enabled;
+                    syncEnableToggleUI();
                     document.getElementById('schedule-recurrence').value = s.recurrence || 'daily';
-                    document.getElementById('schedule-task').value = s.task || 'all';
+                    setSelectedTask(s.task || 'all');
                     document.getElementById('schedule-days-ago').value = s.run_for_days_ago || 1;
                     document.getElementById('schedule-next-run').textContent = s.next_run || 'Not scheduled';
 
@@ -1357,12 +1701,18 @@
         }
 
         async function saveSchedule() {
+            const task = getSelectedTask();
+            if (!task) {
+                showToast('Select at least one report', 'error');
+                return;
+            }
+
             const schedule = {
                 enabled: document.getElementById('schedule-enabled').checked,
                 recurrence: document.getElementById('schedule-recurrence').value,
                 time_of_day: document.getElementById('schedule-time').value,
                 start_date: document.getElementById('schedule-start').value,
-                task: document.getElementById('schedule-task').value,
+                task: task,
                 run_for_days_ago: parseInt(document.getElementById('schedule-days-ago').value)
             };
 
@@ -1380,6 +1730,7 @@
                     if (data.schedule) {
                         document.getElementById('schedule-next-run').textContent = data.schedule.next_run || 'Not scheduled';
                     }
+                    loadAllSchedules();
                 } else {
                     showToast(data.error, 'error');
                 }
@@ -1407,7 +1758,7 @@
                 tbody.innerHTML = data.schedules.map(s => `
                     <tr>
                         <td><strong>${escapeHtml(s.name)}</strong></td>
-                        <td>${escapeHtml(s.task)}</td>
+                        <td><div class="task-pills">${formatTaskDisplay(s.task)}</div></td>
                         <td>${escapeHtml(s.recurrence)}</td>
                         <td>${escapeHtml(s.time_of_day)}</td>
                         <td>${escapeHtml(s.next_run || 'Not scheduled')}</td>

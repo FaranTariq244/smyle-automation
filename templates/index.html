@@ -1122,6 +1122,10 @@
                             <span class="action-label">Add Tracker</span>
                             <span class="action-desc">Atria landing pages</span>
                         </button>
+                        <button class="action-btn" id="btn-run-datads" onclick="runTask('datads')">
+                            <span class="action-label">DataAds</span>
+                            <span class="action-desc">DataAds landing pages</span>
+                        </button>
                         <button class="action-btn" id="btn-run-scheduled" onclick="runScheduleNow()">
                             <span class="action-label">Run Scheduled</span>
                             <span class="action-desc">Trigger schedule now</span>
@@ -1202,6 +1206,13 @@
                                     <div class="report-list-item-text">
                                         <span class="report-list-item-name">Add Tracker</span>
                                         <span class="report-list-item-desc">Atria landing pages</span>
+                                    </div>
+                                </label>
+                                <label class="report-list-item">
+                                    <input type="checkbox" class="sched-report-chk" value="datads" checked onchange="updateReportCount()">
+                                    <div class="report-list-item-text">
+                                        <span class="report-list-item-name">DataAds</span>
+                                        <span class="report-list-item-desc">DataAds landing pages</span>
                                     </div>
                                 </label>
                             </div>
@@ -1371,6 +1382,11 @@
                         <input type="text" id="setting-addtracker" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
                     </div>
 
+                    <div class="form-group">
+                        <label class="form-label">DATADS_SHEET_URL</label>
+                        <input type="text" id="setting-datads" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
+                    </div>
+
                     <div class="divider"></div>
 
                     <div class="btn-group">
@@ -1464,6 +1480,7 @@
             document.getElementById('btn-run-daily').disabled = running;
             document.getElementById('btn-run-order').disabled = running;
             document.getElementById('btn-run-addtracker').disabled = running;
+            document.getElementById('btn-run-datads').disabled = running;
             document.getElementById('btn-run-scheduled').disabled = running;
             document.getElementById('btn-stop').disabled = !running;
         }
@@ -1651,7 +1668,7 @@
         }
 
         function formatTaskDisplay(taskStr) {
-            const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', all: 'All Reports' };
+            const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', datads: 'DataAds', all: 'All Reports' };
             if (!taskStr || taskStr === 'all') return '<span class="task-pill">All Reports</span>';
             return taskStr.split(',').map(t => `<span class="task-pill">${escapeHtml(labels[t.trim()] || t.trim())}</span>`).join('');
         }
@@ -1845,6 +1862,7 @@
                 document.getElementById('setting-worksheet').value = data.WORK_SHEET_NAME || '';
                 document.getElementById('setting-ordertype').value = data.ORDER_TYPE_SHEET_URL || '';
                 document.getElementById('setting-addtracker').value = data.DAILY_ADD_TRACKER_SHEET_URL || '';
+                document.getElementById('setting-datads').value = data.DATADS_SHEET_URL || '';
             } catch (error) {
                 showToast('Failed to load settings', 'error');
             }
@@ -1855,7 +1873,8 @@
                 SPREAD_SHEET_NAME: document.getElementById('setting-spreadsheet').value,
                 WORK_SHEET_NAME: document.getElementById('setting-worksheet').value,
                 ORDER_TYPE_SHEET_URL: document.getElementById('setting-ordertype').value,
-                DAILY_ADD_TRACKER_SHEET_URL: document.getElementById('setting-addtracker').value
+                DAILY_ADD_TRACKER_SHEET_URL: document.getElementById('setting-addtracker').value,
+                DATADS_SHEET_URL: document.getElementById('setting-datads').value
             };
 
             try {

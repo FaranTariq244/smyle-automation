@@ -61,6 +61,7 @@ SETTINGS_KEYS = [
     "WORK_SHEET_NAME",
     "ORDER_TYPE_SHEET_URL",
     "DAILY_ADD_TRACKER_SHEET_URL",
+    "DATADS_SHEET_URL",
 ]
 
 
@@ -103,7 +104,7 @@ def build_subprocess_code(task: str, date_str: str) -> str:
     return f"""
 import sys
 from datetime import datetime
-from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report
+from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report, run_datads_report
 date_str = "{date_str}"
 date_obj = datetime.strptime(date_str, "%d-%b-%Y")
 
@@ -118,6 +119,8 @@ try:
         results.append(run_order_type_report(date_obj, date_str))
     if run_all or "addtracker" in tasks:
         results.append(run_add_tracker_report(date_obj, date_str))
+    if run_all or "datads" in tasks:
+        results.append(run_datads_report(date_obj, date_str))
     ok = all(results) if results else False
     sys.exit(0 if ok else 1)
 except Exception as exc:

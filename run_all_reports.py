@@ -18,6 +18,12 @@ def run_add_tracker_report(date_obj, date_str):
     return _run_add_tracker(date_obj, date_str)
 
 
+def run_datads_report(date_obj, date_str):
+    """Run the DataAds report extraction."""
+    from datads_data_extractor import run_datads_report as _run_datads
+    return _run_datads(date_obj, date_str)
+
+
 def get_date_input():
     """Get date from user or use previous day."""
     print("\n" + "="*80)

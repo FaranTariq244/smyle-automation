@@ -244,6 +244,71 @@ class ScheduleStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
 
+    def check_time_conflict(
+        self,
+        time_of_day: str,
+        recurrence: str,
+        start_date: str,
+        exclude_id: Optional[int] = None,
+        buffer_minutes: int = 30,
+    ) -> Optional[Dict]:
+        """Check if a proposed schedule conflicts with any existing schedule.
+
+        A conflict exists when two schedules would run within `buffer_minutes`
+        of each other on any overlapping day.
+
+        - Daily schedules lock their time slot every day.
+        - Weekly schedules only lock the time slot on the day-of-week they run.
+
+        Returns the conflicting schedule dict, or None if no conflict.
+        """
+        proposed_time = _parse_time_str(time_of_day)
+        proposed_minutes = proposed_time.hour * 60 + proposed_time.minute
+        proposed_start = _parse_date_str(start_date)
+        proposed_dow = proposed_start.weekday()  # 0=Mon
+
+        with self._connect() as conn:
+            cur = conn.execute("SELECT * FROM schedules")
+            rows = cur.fetchall()
+
+        for row in rows:
+            if exclude_id is not None and row["id"] == exclude_id:
+                continue
+
+            existing_time = _parse_time_str(row["time_of_day"])
+            existing_minutes = existing_time.hour * 60 + existing_time.minute
+            existing_start = _parse_date_str(row["start_date"])
+            existing_dow = existing_start.weekday()
+            existing_rec = row["recurrence"]
+
+            # Check if their days can ever overlap
+            days_can_overlap = self._days_overlap(
+                recurrence, proposed_dow, existing_rec, existing_dow
+            )
+            if not days_can_overlap:
+                continue
+
+            # Check time proximity (handle midnight wrap)
+            diff = abs(proposed_minutes - existing_minutes)
+            diff = min(diff, 1440 - diff)  # wrap around midnight
+            if diff < buffer_minutes:
+                return row
+
+        return None
+
+    @staticmethod
+    def _days_overlap(rec_a: str, dow_a: int, rec_b: str, dow_b: int) -> bool:
+        """Return True if two recurrences can ever fire on the same day."""
+        # Daily or hourly runs every day, so always overlaps
+        if rec_a in ("daily", "hourly") or rec_b in ("daily", "hourly"):
+            return True
+        # Both weekly: only overlap if same day-of-week
+        if rec_a == "weekly" and rec_b == "weekly":
+            return dow_a == dow_b
+        # Weekly vs every_4_days or monthly: conservatively assume overlap
+        # (exact calculation would need calendar math - not worth the complexity)
+        return True
+
     def due_schedules(self, reference: Optional[datetime] = None) -> List[Dict]:
         reference = reference or datetime.now()
         with self._connect() as conn:

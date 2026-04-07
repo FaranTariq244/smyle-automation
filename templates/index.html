@@ -935,6 +935,97 @@
             color: var(--accent);
         }
 
+        /* ── DataAds mode toggle ── */
+        .datads-mode-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.15s;
+        }
+        .datads-mode-btn.active {
+            background: var(--accent-glow);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* ── Mapping section ── */
+        .mapping-tab {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .mapping-tab.active {
+            background: var(--accent-glow);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .mapping-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .mapping-row:last-child { border-bottom: none; }
+        .mapping-row .mapping-num {
+            color: var(--text-muted);
+            font-size: 11px;
+            min-width: 20px;
+            text-align: center;
+        }
+        .mapping-row .mapping-input {
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            padding: 5px 8px;
+            font-size: 12px;
+            flex: 1;
+            min-width: 0;
+        }
+        .mapping-row .mapping-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .mapping-row .mapping-arrow {
+            color: var(--text-muted);
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .mapping-row-actions {
+            display: flex;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+        .mapping-row-actions button {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 13px;
+            line-height: 1;
+        }
+        .mapping-row-actions button:hover {
+            color: var(--text-primary);
+            border-color: var(--border);
+        }
+        .mapping-row-actions button.mapping-del:hover {
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+
         /* ── Responsive ── */
         @media (max-width: 768px) {
             .sidebar {
@@ -1082,10 +1173,24 @@
                         </div>
                         <button class="btn btn-secondary btn-sm" onclick="fillPreviousDay()">Use previous day</button>
                     </div>
+
+                    <!-- DataAds Mode Toggle -->
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+                        <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">DataAds Mode:</span>
+                        <div style="display:flex; gap:4px;">
+                            <button class="btn btn-sm datads-mode-btn active" id="datads-mode-daily" onclick="setDatadsMode('daily')">Daily</button>
+                            <button class="btn btn-sm datads-mode-btn" id="datads-mode-weekly" onclick="setDatadsMode('weekly')">Weekly</button>
+                        </div>
+                    </div>
+
                     <div class="form-row cols-2">
                         <div class="form-group" style="margin-bottom:0;">
-                            <label class="form-label">Date (DD-MMM-YYYY)</label>
+                            <label class="form-label" id="date-label-start">Date (DD-MMM-YYYY)</label>
                             <input type="date" id="date-input" class="form-input" onclick="this.showPicker()" style="cursor:pointer;">
+                        </div>
+                        <div class="form-group" style="margin-bottom:0; display:none;" id="date-end-group">
+                            <label class="form-label">End Date</label>
+                            <input type="date" id="date-input-end" class="form-input" onclick="this.showPicker()" style="cursor:pointer;">
                         </div>
                     </div>
                 </div>
@@ -1122,9 +1227,9 @@
                             <span class="action-label">Add Tracker</span>
                             <span class="action-desc">Atria landing pages</span>
                         </button>
-                        <button class="action-btn" id="btn-run-datads" onclick="runTask('datads')">
-                            <span class="action-label">DataAds</span>
-                            <span class="action-desc">DataAds landing pages</span>
+                        <button class="action-btn" id="btn-run-datads" onclick="runDatads()">
+                            <span class="action-label" id="datads-btn-label">DataAds (Daily)</span>
+                            <span class="action-desc" id="datads-btn-desc">DataAds landing pages</span>
                         </button>
                         <button class="action-btn" id="btn-run-scheduled" onclick="runScheduleNow()">
                             <span class="action-label">Run Scheduled</span>
@@ -1173,9 +1278,18 @@
                         <div>
                             <div class="card-title">
                                 <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                                Configure Schedule
+                                <span id="schedule-form-title">Add New Schedule</span>
                             </div>
+                            <div class="card-subtitle" id="schedule-form-subtitle">Each schedule needs at least 30 minutes between run times</div>
                         </div>
+                        <button class="btn btn-secondary btn-sm" id="schedule-cancel-edit-btn" onclick="cancelEditSchedule()" style="display:none;">Cancel Edit</button>
+                    </div>
+
+                    <!-- Schedule Name -->
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label class="form-label">Schedule name</label>
+                        <input type="text" id="schedule-name" class="form-input" placeholder="e.g. Daily Morning Reports, Weekly DataAds Monday">
+                        <input type="hidden" id="schedule-edit-id" value="">
                     </div>
 
                     <!-- Report Selection -->
@@ -1183,7 +1297,7 @@
                         <label class="form-label">Reports to run</label>
                         <div class="report-list">
                             <div class="report-list-header">
-                                <span class="report-list-count" id="sched-selected-count">3 of 3 selected</span>
+                                <span class="report-list-count" id="sched-selected-count">4 of 5 selected</span>
                                 <button type="button" class="report-list-toggle-all" onclick="toggleAllReports()">Toggle all</button>
                             </div>
                             <div id="report-list-items">
@@ -1211,8 +1325,15 @@
                                 <label class="report-list-item">
                                     <input type="checkbox" class="sched-report-chk" value="datads" checked onchange="updateReportCount()">
                                     <div class="report-list-item-text">
-                                        <span class="report-list-item-name">DataAds</span>
-                                        <span class="report-list-item-desc">DataAds landing pages</span>
+                                        <span class="report-list-item-name">DataAds (Daily)</span>
+                                        <span class="report-list-item-desc">DataAds daily landing pages</span>
+                                    </div>
+                                </label>
+                                <label class="report-list-item">
+                                    <input type="checkbox" class="sched-report-chk" value="datads_weekly" onchange="updateReportCount()">
+                                    <div class="report-list-item-text">
+                                        <span class="report-list-item-name">DataAds (Weekly)</span>
+                                        <span class="report-list-item-desc">DataAds weekly date range report</span>
                                     </div>
                                 </label>
                             </div>
@@ -1259,37 +1380,13 @@
 
                     <div class="divider"></div>
 
-                    <!-- Footer with actions + status -->
+                    <!-- Footer with actions -->
                     <div class="schedule-footer">
                         <div class="btn-group">
-                            <button class="btn btn-primary" onclick="saveSchedule()" style="min-width: 140px;">
-                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
-                                Save Schedule
+                            <button class="btn btn-primary" id="schedule-save-btn" onclick="saveSchedule()" style="min-width: 160px;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                                Add Schedule
                             </button>
-                            <button class="btn btn-secondary" onclick="runScheduleNow()" style="min-width: 140px;">
-                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/></svg>
-                                Run Now
-                            </button>
-                        </div>
-                        <div class="schedule-status-cards">
-                            <div class="schedule-status-card">
-                                <div class="schedule-status-icon next">
-                                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                </div>
-                                <div class="schedule-status-info">
-                                    <div class="label">Next run</div>
-                                    <div class="value" id="schedule-next-run">Not scheduled</div>
-                                </div>
-                            </div>
-                            <div class="schedule-status-card">
-                                <div class="schedule-status-icon result">
-                                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                </div>
-                                <div class="schedule-status-info">
-                                    <div class="label">Last result</div>
-                                    <div class="value" id="schedule-last-status">No runs yet</div>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -1321,7 +1418,7 @@
                                     <th>Next Run</th>
                                     <th>Status</th>
                                     <th>Enabled</th>
-                                    <th>Actions</th>
+                                    <th style="min-width:180px;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="schedules-tbody"></tbody>
@@ -1331,7 +1428,7 @@
                     <div id="schedules-empty" class="schedule-list-empty" style="display: none;">
                         <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
                         <h3>No schedules yet</h3>
-                        <p>Configure a schedule above to get started.</p>
+                        <p>Add a schedule above to get started.</p>
                     </div>
                 </div>
             </div>
@@ -1394,6 +1491,66 @@
                         <button class="btn btn-secondary" onclick="loadSettings()">Reload</button>
                     </div>
                 </div>
+
+                <!-- Column Mappings -->
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">
+                                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+                                Column Mappings
+                            </div>
+                            <div class="card-subtitle">Configure how extracted fields map to sheet columns</div>
+                        </div>
+                    </div>
+
+                    <!-- Report Selector -->
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+                        <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Report:</span>
+                        <select id="mapping-report-select" class="form-input" style="width:auto; min-width:160px; padding:5px 10px; font-size:12px;" onchange="onMappingReportChange()">
+                            <option value="datads" selected>DataAds</option>
+                        </select>
+                    </div>
+
+                    <!-- Mode Tabs -->
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+                        <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Mode:</span>
+                        <div style="display:flex; gap:4px;">
+                            <button class="btn btn-sm mapping-tab active" id="mapping-tab-daily" onclick="switchMappingTab('daily')">Daily</button>
+                            <button class="btn btn-sm mapping-tab" id="mapping-tab-weekly" onclick="switchMappingTab('weekly')">Weekly</button>
+                        </div>
+                    </div>
+
+                    <!-- Column headers -->
+                    <div style="display:flex; align-items:center; gap:8px; padding:4px 0 6px; border-bottom:1px solid var(--border); margin-bottom:2px;">
+                        <div style="min-width:20px;"></div>
+                        <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Source Field</div>
+                        <div style="width:24px;"></div>
+                        <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Sheet Column</div>
+                        <div style="width:72px;"></div>
+                    </div>
+
+                    <!-- Mapping Rows -->
+                    <div id="mapping-rows-container" style="max-height:460px; overflow-y:auto;">
+                        <!-- Populated by JS -->
+                    </div>
+
+                    <!-- Add Row -->
+                    <div style="padding:8px 0;">
+                        <button class="btn btn-ghost btn-sm" onclick="addMappingRow()" style="font-size:12px; gap:4px;">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"/></svg>
+                            Add field
+                        </button>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="saveMappings()">Save Mappings</button>
+                        <button class="btn btn-secondary" onclick="resetMappings()">Restore Defaults</button>
+                        <button class="btn btn-secondary" onclick="copyDailyToWeekly()" id="btn-copy-to-weekly" style="display:none;">Copy Daily to Weekly</button>
+                    </div>
+                </div>
             </div>
 
         </div>
@@ -1440,7 +1597,7 @@
                 document.querySelector(`.nav-item[onclick="showPage('reports')"]`)?.classList.add('active');
             }
 
-            if (pageName === 'settings') loadSettings();
+            if (pageName === 'settings') { loadSettings(); loadMappings(); }
             else if (pageName === 'schedules') { loadSchedule(); loadAllSchedules(); }
 
             // Close mobile sidebar
@@ -1566,6 +1723,67 @@
             }
         }
 
+        // ── DataAds mode handling ──
+        let datadsMode = 'daily';
+
+        function setDatadsMode(mode) {
+            datadsMode = mode;
+            document.querySelectorAll('.datads-mode-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById('datads-mode-' + mode).classList.add('active');
+
+            const endGroup = document.getElementById('date-end-group');
+            const startLabel = document.getElementById('date-label-start');
+            const btnLabel = document.getElementById('datads-btn-label');
+            const btnDesc = document.getElementById('datads-btn-desc');
+
+            if (mode === 'weekly') {
+                endGroup.style.display = '';
+                startLabel.textContent = 'Start Date';
+                btnLabel.textContent = 'DataAds (Weekly)';
+                btnDesc.textContent = 'Weekly date range report';
+            } else {
+                endGroup.style.display = 'none';
+                startLabel.textContent = 'Date (DD-MMM-YYYY)';
+                btnLabel.textContent = 'DataAds (Daily)';
+                btnDesc.textContent = 'DataAds landing pages';
+            }
+        }
+
+        async function runDatads() {
+            if (isRunning) {
+                showToast('A task is already running', 'error');
+                return;
+            }
+
+            const dateInput = nativeToDate(document.getElementById('date-input').value);
+
+            if (datadsMode === 'weekly') {
+                const endDateInput = nativeToDate(document.getElementById('date-input-end').value);
+                if (!dateInput || !endDateInput) {
+                    showToast('Please select both start and end dates for weekly mode', 'error');
+                    return;
+                }
+                try {
+                    const response = await fetch('/api/run', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            task: 'datads_weekly',
+                            date: dateInput,
+                            end_date: endDateInput
+                        })
+                    });
+                    const data = await response.json();
+                    if (data.success) showToast(data.message, 'success');
+                    else showToast(data.error, 'error');
+                } catch (error) {
+                    showToast('Failed to start task', 'error');
+                }
+            } else {
+                runTask('datads');
+            }
+        }
+
         async function stopTask() {
             try {
                 const response = await fetch('/api/stop', { method: 'POST' });
@@ -1581,18 +1799,23 @@
             }
         }
 
-        async function runScheduleNow() {
+        async function runScheduleNow(scheduleId) {
             if (isRunning) {
                 showToast('A task is already running', 'error');
                 return;
             }
 
             try {
-                const response = await fetch('/api/run-schedule-now', { method: 'POST' });
+                const response = await fetch('/api/run-schedule-now', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schedule_id: scheduleId })
+                });
                 const data = await response.json();
 
                 if (data.success) {
-                    showToast('Schedule triggered', 'success');
+                    showToast(data.message || 'Schedule triggered', 'success');
+                    loadAllSchedules();
                 } else {
                     showToast(data.error, 'error');
                 }
@@ -1629,7 +1852,12 @@
             const boxes = getReportCheckboxes();
             const checked = Array.from(boxes).filter(cb => cb.checked).map(cb => cb.value);
             if (checked.length === 0) return '';
-            if (checked.length === boxes.length) return 'all';
+            // "all" only covers the core daily reports (daily,order,addtracker,datads)
+            // datads_weekly is separate and always explicit
+            const coreReports = ['daily', 'order', 'addtracker', 'datads'];
+            const checkedCore = checked.filter(v => coreReports.includes(v));
+            const hasWeekly = checked.includes('datads_weekly');
+            if (checkedCore.length === coreReports.length && !hasWeekly) return 'all';
             return checked.join(',');
         }
 
@@ -1668,70 +1896,101 @@
         }
 
         function formatTaskDisplay(taskStr) {
-            const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', datads: 'DataAds', all: 'All Reports' };
+            const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', datads: 'DataAds Daily', datads_weekly: 'DataAds Weekly', all: 'All Reports' };
             if (!taskStr || taskStr === 'all') return '<span class="task-pill">All Reports</span>';
             return taskStr.split(',').map(t => `<span class="task-pill">${escapeHtml(labels[t.trim()] || t.trim())}</span>`).join('');
         }
 
         async function refreshScheduleStatus() {
-            try {
-                const response = await fetch('/api/schedule');
-                const data = await response.json();
+            // No single-schedule status cards anymore - just refresh the table
+            loadAllSchedules();
+        }
 
-                if (data.schedule) {
-                    const s = data.schedule;
-                    document.getElementById('schedule-next-run').textContent = s.next_run || 'Not scheduled';
-
-                    let lastStatus = s.last_status || 'No runs yet';
-                    if (s.last_run) lastStatus += ` at ${s.last_run}`;
-                    document.getElementById('schedule-last-status').textContent = lastStatus;
-                }
-            } catch (error) {
-                console.error('Failed to refresh schedule status:', error);
-            }
+        function resetScheduleForm() {
+            document.getElementById('schedule-name').value = '';
+            document.getElementById('schedule-edit-id').value = '';
+            document.getElementById('schedule-time').value = getCurrentTimeHHMM();
+            document.getElementById('schedule-start').value = new Date().toISOString().split('T')[0];
+            document.getElementById('schedule-recurrence').value = 'daily';
+            document.getElementById('schedule-days-ago').value = '1';
+            document.getElementById('schedule-enabled').checked = true;
+            syncEnableToggleUI();
+            // Reset checkboxes - uncheck all by default for new schedule
+            getReportCheckboxes().forEach(cb => { cb.checked = false; });
+            updateReportCount();
+            // Reset form title
+            document.getElementById('schedule-form-title').textContent = 'Add New Schedule';
+            document.getElementById('schedule-form-subtitle').textContent = 'Each schedule needs at least 30 minutes between run times';
+            document.getElementById('schedule-save-btn').innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg> Add Schedule';
+            document.getElementById('schedule-cancel-edit-btn').style.display = 'none';
         }
 
         async function loadSchedule() {
+            // Just reset the form and load the table
+            resetScheduleForm();
+            loadAllSchedules();
+        }
+
+        async function editSchedule(scheduleId) {
             try {
-                const response = await fetch('/api/schedule');
+                const response = await fetch(`/api/schedules/${scheduleId}`);
                 const data = await response.json();
-
-                document.getElementById('schedule-time').value = getCurrentTimeHHMM();
-                document.getElementById('schedule-start').value = new Date().toISOString().split('T')[0];
-
-                if (data.schedule) {
-                    const s = data.schedule;
-                    document.getElementById('schedule-enabled').checked = s.enabled;
-                    syncEnableToggleUI();
-                    document.getElementById('schedule-recurrence').value = s.recurrence || 'daily';
-                    setSelectedTask(s.task || 'all');
-                    document.getElementById('schedule-days-ago').value = s.run_for_days_ago || 1;
-                    document.getElementById('schedule-next-run').textContent = s.next_run || 'Not scheduled';
-
-                    let lastStatus = s.last_status || 'No runs yet';
-                    if (s.last_run) lastStatus += ` at ${s.last_run}`;
-                    document.getElementById('schedule-last-status').textContent = lastStatus;
+                if (!data.success || !data.schedule) {
+                    showToast('Schedule not found', 'error');
+                    return;
                 }
+                const s = data.schedule;
+                document.getElementById('schedule-edit-id').value = s.id;
+                document.getElementById('schedule-name').value = s.name || '';
+                document.getElementById('schedule-recurrence').value = s.recurrence || 'daily';
+                document.getElementById('schedule-time').value = s.time_of_day || '07:00';
+                document.getElementById('schedule-start').value = s.start_date || new Date().toISOString().split('T')[0];
+                document.getElementById('schedule-days-ago').value = s.run_for_days_ago || 1;
+                document.getElementById('schedule-enabled').checked = !!s.enabled;
+                syncEnableToggleUI();
+                setSelectedTask(s.task || 'all');
+                // Update form title to edit mode
+                document.getElementById('schedule-form-title').textContent = 'Edit Schedule';
+                document.getElementById('schedule-form-subtitle').textContent = `Editing: ${s.name}`;
+                document.getElementById('schedule-save-btn').innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg> Update Schedule';
+                document.getElementById('schedule-cancel-edit-btn').style.display = '';
+                // Scroll to form
+                document.getElementById('schedule-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                document.getElementById('schedule-name').focus();
             } catch (error) {
-                console.error('Failed to load schedule:', error);
+                showToast('Failed to load schedule for editing', 'error');
             }
         }
 
+        function cancelEditSchedule() {
+            resetScheduleForm();
+        }
+
         async function saveSchedule() {
+            const name = document.getElementById('schedule-name').value.trim();
+            if (!name) {
+                showToast('Enter a schedule name', 'error');
+                document.getElementById('schedule-name').focus();
+                return;
+            }
+
             const task = getSelectedTask();
             if (!task) {
                 showToast('Select at least one report', 'error');
                 return;
             }
 
+            const editId = document.getElementById('schedule-edit-id').value;
             const schedule = {
+                name: name,
                 enabled: document.getElementById('schedule-enabled').checked,
                 recurrence: document.getElementById('schedule-recurrence').value,
                 time_of_day: document.getElementById('schedule-time').value,
                 start_date: document.getElementById('schedule-start').value,
                 task: task,
-                run_for_days_ago: parseInt(document.getElementById('schedule-days-ago').value)
+                run_for_days_ago: parseInt(document.getElementById('schedule-days-ago').value),
             };
+            if (editId) schedule.edit_id = editId;
 
             try {
                 const response = await fetch('/api/schedule', {
@@ -1743,10 +2002,8 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    showToast('Schedule saved', 'success');
-                    if (data.schedule) {
-                        document.getElementById('schedule-next-run').textContent = data.schedule.next_run || 'Not scheduled';
-                    }
+                    showToast(editId ? 'Schedule updated' : 'Schedule added', 'success');
+                    resetScheduleForm();
                     loadAllSchedules();
                 } else {
                     showToast(data.error, 'error');
@@ -1791,8 +2048,16 @@
                             </label>
                         </td>
                         <td>
-                            <div class="table-actions">
-                                <button class="btn btn-danger btn-sm" onclick="deleteSchedule(${s.id})">Delete</button>
+                            <div class="table-actions" style="display:flex;gap:6px;flex-wrap:nowrap;">
+                                <button class="btn btn-secondary btn-sm" onclick="runScheduleNow(${s.id})" title="Run now">
+                                    <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/></svg>
+                                    Run
+                                </button>
+                                <button class="btn btn-secondary btn-sm" onclick="editSchedule(${s.id})" title="Edit">
+                                    <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                    Edit
+                                </button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteSchedule(${s.id})" title="Delete">Del</button>
                             </div>
                         </td>
                     </tr>
@@ -1894,6 +2159,147 @@
             } catch (error) {
                 showToast('Failed to save settings', 'error');
             }
+        }
+
+        // ── Column Mapping Configuration ──
+        let mappingData = { daily: [], weekly: [], defaults: [] };
+        let currentMappingTab = 'daily';
+
+        async function loadMappings() {
+            try {
+                const response = await fetch('/api/datads-mappings');
+                mappingData = await response.json();
+                renderMappingTable();
+            } catch (error) {
+                console.error('Failed to load mappings:', error);
+            }
+        }
+
+        function onMappingReportChange() {
+            // Future: load different report mappings
+            // Currently only DataAds is available
+            loadMappings();
+        }
+
+        function getMappings() {
+            return mappingData[currentMappingTab] || mappingData.defaults || [];
+        }
+
+        function setMappings(arr) {
+            mappingData[currentMappingTab] = arr;
+        }
+
+        function renderMappingTable() {
+            const container = document.getElementById('mapping-rows-container');
+            const mappings = getMappings();
+            const len = mappings.length;
+
+            container.innerHTML = mappings.map((m, i) => `
+                <div class="mapping-row" data-idx="${i}">
+                    <span class="mapping-num">${i + 1}</span>
+                    <input class="mapping-input mapping-src" value="${escapeHtml(m.datads_field)}" placeholder="Source field name" />
+                    <span class="mapping-arrow">&rarr;</span>
+                    <input class="mapping-input mapping-col" value="${escapeHtml(m.sheet_column)}" placeholder="Sheet column name" />
+                    <div class="mapping-row-actions">
+                        <button title="Move up" onclick="moveMappingRow(${i}, -1)" ${i === 0 ? 'disabled style="opacity:0.3"' : ''}>&#9650;</button>
+                        <button title="Move down" onclick="moveMappingRow(${i}, 1)" ${i === len - 1 ? 'disabled style="opacity:0.3"' : ''}>&#9660;</button>
+                        <button class="mapping-del" title="Remove" onclick="removeMappingRow(${i})">&#10005;</button>
+                    </div>
+                </div>
+            `).join('');
+
+            document.getElementById('btn-copy-to-weekly').style.display =
+                currentMappingTab === 'weekly' ? '' : 'none';
+        }
+
+        function switchMappingTab(tab) {
+            currentMappingTab = tab;
+            document.querySelectorAll('.mapping-tab').forEach(el => el.classList.remove('active'));
+            document.getElementById('mapping-tab-' + tab).classList.add('active');
+            renderMappingTable();
+        }
+
+        function collectMappingsFromUI() {
+            const rows = document.querySelectorAll('#mapping-rows-container .mapping-row');
+            const mappings = [];
+            rows.forEach(row => {
+                const src = row.querySelector('.mapping-src').value.trim();
+                const col = row.querySelector('.mapping-col').value.trim();
+                if (src || col) {
+                    mappings.push({ datads_field: src, sheet_column: col || src });
+                }
+            });
+            return mappings;
+        }
+
+        function addMappingRow() {
+            // Save current edits first
+            const current = collectMappingsFromUI();
+            current.push({ datads_field: '', sheet_column: '' });
+            setMappings(current);
+            renderMappingTable();
+            // Focus the new source input
+            const inputs = document.querySelectorAll('#mapping-rows-container .mapping-src');
+            if (inputs.length) inputs[inputs.length - 1].focus();
+        }
+
+        function removeMappingRow(idx) {
+            const current = collectMappingsFromUI();
+            current.splice(idx, 1);
+            setMappings(current);
+            renderMappingTable();
+        }
+
+        function moveMappingRow(idx, direction) {
+            const current = collectMappingsFromUI();
+            const newIdx = idx + direction;
+            if (newIdx < 0 || newIdx >= current.length) return;
+            const item = current.splice(idx, 1)[0];
+            current.splice(newIdx, 0, item);
+            setMappings(current);
+            renderMappingTable();
+        }
+
+        async function saveMappings() {
+            const mappings = collectMappingsFromUI().filter(m => m.datads_field && m.sheet_column);
+            if (mappings.length === 0) {
+                showToast('Add at least one mapping', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/datads-mappings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: currentMappingTab, mappings })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    setMappings(mappings);
+                    renderMappingTable();
+                    showToast(`${currentMappingTab.charAt(0).toUpperCase() + currentMappingTab.slice(1)} mappings saved`, 'success');
+                } else {
+                    showToast(data.error || 'Failed to save mappings', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to save mappings', 'error');
+            }
+        }
+
+        function resetMappings() {
+            if (!confirm(`Restore ${currentMappingTab} mappings to defaults?`)) return;
+            setMappings(JSON.parse(JSON.stringify(mappingData.defaults)));
+            renderMappingTable();
+            showToast('Mappings restored to defaults (click Save to persist)', 'info');
+        }
+
+        function copyDailyToWeekly() {
+            if (!confirm('Copy daily mappings to weekly? This will overwrite current weekly mappings.')) return;
+            mappingData.weekly = JSON.parse(JSON.stringify(
+                collectMappingsFromUI().length ? collectMappingsFromUI() : mappingData.daily
+            ));
+            if (currentMappingTab === 'weekly') renderMappingTable();
+            showToast('Daily mappings copied to weekly (click Save to persist)', 'info');
         }
 
         // Helper

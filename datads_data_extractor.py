@@ -29,21 +29,26 @@ class DataAdsDataExtractor:
         self.driver = driver
         self.wait = WebDriverWait(driver, 30)
 
-    def build_report_url(self, date_obj):
+    def build_report_url(self, date_obj, end_date_obj=None):
         """
         Build the full report URL with date parameters.
 
         Args:
-            date_obj: datetime object for the target date
+            date_obj: datetime object for the start date
+            end_date_obj: optional datetime for end date (defaults to same as start)
         Returns:
             str: Full URL with query params
         """
         # Format date as YYYY-M-D (no zero padding, matching the original URL format)
         date_str = f"{date_obj.year}-{date_obj.month}-{date_obj.day}"
+        if end_date_obj is None:
+            end_date_obj = date_obj
 
         # Build gridMetrics JSON array
         import urllib.parse
         metrics_json = "[" + ",".join(f'"{m}"' for m in self.GRID_METRICS) + "]"
+
+        end_date_str = f"{end_date_obj.year}-{end_date_obj.month}-{end_date_obj.day}"
 
         params = {
             "pageSize": "80",
@@ -55,7 +60,7 @@ class DataAdsDataExtractor:
             "sortBy": "PRIMARY_METRIC",
             "timeframe": "",
             "startDate": date_str,
-            "endDate": date_str,
+            "endDate": end_date_str,
             "viewType": "grid",
             "gridMetrics": metrics_json,
         }
@@ -63,9 +68,9 @@ class DataAdsDataExtractor:
         query = "&".join(f"{k}={urllib.parse.quote(str(v), safe='[]\",')}" for k, v in params.items())
         return f"{self.BASE_URL}?{query}"
 
-    def navigate_to_report(self, date_obj):
-        """Navigate to the DataAds report page for the given date."""
-        url = self.build_report_url(date_obj)
+    def navigate_to_report(self, date_obj, end_date_obj=None):
+        """Navigate to the DataAds report page for the given date (range)."""
+        url = self.build_report_url(date_obj, end_date_obj)
         print(f"[NAV] Navigating to DataAds report...")
         print(f"[NAV] URL: {url[:120]}...")
         self.driver.get(url)
@@ -380,6 +385,104 @@ def run_datads_report(date_obj, date_str):
 
     except Exception as e:
         print(f"\nDataAds Report failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def run_datads_weekly_report(start_date_obj, end_date_obj, start_date_str, end_date_str):
+    """
+    Run the DataAds weekly report extraction with a date range.
+
+    Args:
+        start_date_obj: datetime for start of week
+        end_date_obj: datetime for end of week
+        start_date_str: String representation of start date
+        end_date_str: String representation of end date
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    print("\n\n")
+    print("=" * 80)
+    print("DATADS WEEKLY REPORT".center(80))
+    print(f"Date range: {start_date_str} to {end_date_str}".center(80))
+    print("=" * 80 + "\n")
+
+    try:
+        from browser_manager import BrowserManager
+        import time
+
+        print("[1/5] Opening browser...")
+        manager = BrowserManager(use_existing_chrome=False)
+        driver = manager.start_browser()
+
+        extractor = DataAdsDataExtractor(driver)
+
+        # Navigate to report with date range in URL
+        print("[2/5] Navigating to DataAds report (weekly)...")
+        extractor.navigate_to_report(start_date_obj, end_date_obj)
+
+        # Check if login is needed
+        current_url = driver.current_url.lower()
+        if "login" in current_url or "sign" in current_url or "auth" in current_url:
+            print("\n  DataAds login required - restarting browser in visible mode...")
+            manager.close()
+            time.sleep(2)
+            manager = BrowserManager(use_existing_chrome=False)
+            driver = manager.start_browser(headless=False)
+            extractor = DataAdsDataExtractor(driver)
+            extractor.navigate_to_report(start_date_obj, end_date_obj)
+            time.sleep(3)
+            if not extractor.check_and_wait_for_login():
+                print("Login failed or timed out")
+                manager.close()
+                return False
+            extractor.navigate_to_report(start_date_obj, end_date_obj)
+        elif not extractor.check_and_wait_for_login():
+            print("Login failed or timed out")
+            manager.close()
+            return False
+
+        print("[3/5] Waiting for data to load...")
+        extractor.wait_for_data_load()
+        time.sleep(3)
+
+        print("[4/5] Extracting data...")
+        data = extractor.extract_table_data()
+
+        print("\n*** DATADS WEEKLY REPORT DATA ***")
+        extractor.display_data(data)
+
+        print("\n" + "=" * 80)
+        print("EXTRACTION SUMMARY")
+        print("=" * 80)
+        print(f"DataAds Weekly Report: {len(data)} rows extracted")
+        print("=" * 80)
+
+        print("[5/5] Closing browser...")
+        manager.close()
+
+        # Write to Google Sheets (weekly mode)
+        print("\n[6/6] Writing weekly data to Google Sheets...")
+        try:
+            from services.sheets.datads_helpers import write_datads_weekly_data_to_sheets
+            write_datads_weekly_data_to_sheets(start_date_obj, end_date_obj, data)
+            print("  Successfully wrote weekly data to Google Sheets!")
+        except Exception as e:
+            print(f"  Warning: Could not write to Google Sheets: {e}")
+            print("  (Data was extracted successfully, but sheet update failed)")
+            import traceback
+            traceback.print_exc()
+
+        print("\n" + "=" * 80)
+        print("DATADS WEEKLY REPORT COMPLETED SUCCESSFULLY")
+        print("=" * 80)
+
+        return True
+
+    except Exception as e:
+        print(f"\nDataAds Weekly Report failed: {e}")
         import traceback
         traceback.print_exc()
         return False

@@ -26,7 +26,7 @@ os.chdir(PROJECT_ROOT)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config_store import get_settings, set_settings
+from config_store import get_settings, set_settings, set_setting
 from scheduler import RECURRENCE_CHOICES, ScheduleStore, SchedulerService
 
 app = Flask(__name__)
@@ -95,18 +95,21 @@ def broadcast_status(status: str, running: bool):
     socketio.emit('status_update', {'status': status, 'running': running})
 
 
-def build_subprocess_code(task: str, date_str: str) -> str:
+def build_subprocess_code(task: str, date_str: str, end_date_str: str = "") -> str:
     """Build inline Python code for the child process to execute.
 
     ``task`` may be a single key ("daily"), comma-separated ("daily,order"),
-    or "all" to run every report.
+    or "all" to run every report.  "datads_weekly" triggers the weekly DataAds
+    pipeline with a date range.
     """
     return f"""
 import sys
 from datetime import datetime
-from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report, run_datads_report
+from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report, run_datads_report, run_datads_weekly_report
 date_str = "{date_str}"
 date_obj = datetime.strptime(date_str, "%d-%b-%Y")
+end_date_str = "{end_date_str}"
+end_date_obj = datetime.strptime(end_date_str, "%d-%b-%Y") if end_date_str else None
 
 tasks = "{task}".split(",")
 run_all = "all" in tasks
@@ -121,6 +124,8 @@ try:
         results.append(run_add_tracker_report(date_obj, date_str))
     if run_all or "datads" in tasks:
         results.append(run_datads_report(date_obj, date_str))
+    if "datads_weekly" in tasks and end_date_obj:
+        results.append(run_datads_weekly_report(date_obj, end_date_obj, date_str, end_date_str))
     ok = all(results) if results else False
     sys.exit(0 if ok else 1)
 except Exception as exc:
@@ -263,12 +268,22 @@ def on_schedule_due(schedule: dict) -> bool:
     state.current_schedule_id = schedule_id
     state.current_run_origin = "scheduled"
 
-    # Start the task
+    # Check if datads_weekly is in the task list - calculate weekly date range
+    task = schedule.get("task", "all")
+    end_date_str = ""
+    if "datads_weekly" in task:
+        # For weekly DataAds: end date = days_ago, start date = days_ago + 6
+        # This gives a 7-day range ending on the target date
+        weekly_start = target_date - timedelta(days=6)
+        end_date_str = date_str  # end = target date
+        date_str = weekly_start.strftime("%d-%b-%Y")  # start = 6 days before
+
     start_task_with_date(
-        schedule.get("task", "all"),
+        task,
         target_date,
         date_str,
-        origin="scheduled"
+        origin="scheduled",
+        end_date_str=end_date_str,
     )
     return True
 
@@ -280,6 +295,8 @@ def _task_display_name(task: str) -> str:
         "daily": "Daily Report",
         "order": "Order Type Report",
         "addtracker": "Daily Add Tracker",
+        "datads": "DataAds Daily",
+        "datads_weekly": "DataAds Weekly",
     }
     if task in labels:
         return labels[task]
@@ -290,9 +307,11 @@ def _task_display_name(task: str) -> str:
     return " + ".join(named) if named else "Automation"
 
 
-def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: str):
-    """Start a task with a specific date."""
+def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: str,
+                         end_date_str: str = ""):
+    """Start a task with a specific date (and optional end date for weekly)."""
     task_name = _task_display_name(task)
+    display_date = f"{date_str} to {end_date_str}" if end_date_str else date_str
 
     origin_label = "Scheduled run" if origin == "scheduled" else "Manual run"
     state.running = True
@@ -302,13 +321,13 @@ def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: s
     state.current_run_origin = origin
     state._completion_in_progress = False
     state.last_log_path = None
-    state.current_log_path = start_log_file(task_name, date_str, origin)
+    state.current_log_path = start_log_file(task_name, display_date, origin)
 
-    broadcast_status(f"{origin_label}: Running {task_name} for {date_str}...", True)
-    broadcast_log(f"\n{'=' * 80}\n{origin_label} - {task_name} for {date_str}\n{'=' * 80}\n")
+    broadcast_status(f"{origin_label}: Running {task_name} for {display_date}...", True)
+    broadcast_log(f"\n{'=' * 80}\n{origin_label} - {task_name} for {display_date}\n{'=' * 80}\n")
 
     # Launch subprocess
-    code = build_subprocess_code(task, date_str)
+    code = build_subprocess_code(task, date_str, end_date_str=end_date_str)
     cmd = [sys.executable, "-u", "-c", code]
     try:
         proc = subprocess.Popen(
@@ -363,14 +382,15 @@ def index():
 @app.route('/api/status')
 def get_status():
     """Get current application status."""
-    schedule = state.scheduler_store.get_by_key("marketing_reports")
+    schedules = state.scheduler_store.list_schedules()
     return jsonify({
         'running': state.running,
         'current_task': state.current_task,
         'current_date': state.current_date_str,
         'origin': state.current_run_origin,
         'last_log_path': str(state.last_log_path) if state.last_log_path else None,
-        'schedule': schedule,
+        'schedule': schedules[0] if schedules else None,
+        'schedule_count': len(schedules),
     })
 
 
@@ -390,23 +410,52 @@ def save_settings_api():
     return jsonify({'success': True, 'message': 'Settings saved'})
 
 
+@app.route('/api/datads-mappings', methods=['GET'])
+def get_datads_mappings():
+    """Get DataAds column mappings for daily and weekly modes."""
+    from services.sheets.datads_helpers import get_column_mappings, DEFAULT_COLUMN_MAPPINGS
+    daily = get_column_mappings('daily')
+    weekly = get_column_mappings('weekly')
+    defaults = [{"datads_field": m.datads_field, "sheet_column": m.sheet_column}
+                for m in DEFAULT_COLUMN_MAPPINGS]
+    return jsonify({
+        'daily': daily,
+        'weekly': weekly,
+        'defaults': defaults,
+    })
+
+
+@app.route('/api/datads-mappings', methods=['POST'])
+def save_datads_mappings():
+    """Save DataAds column mappings."""
+    import json as _json
+    data = request.json
+    mode = data.get('mode', 'daily')
+    mappings = data.get('mappings', [])
+
+    if mode not in ('daily', 'weekly'):
+        return jsonify({'success': False, 'error': 'Invalid mode'}), 400
+
+    key = f"DATADS_{mode.upper()}_MAPPINGS"
+    set_setting(key, _json.dumps(mappings))
+    return jsonify({'success': True, 'message': f'{mode.title()} mappings saved'})
+
+
 @app.route('/api/schedule', methods=['GET'])
 def get_schedule():
-    """Get scheduler configuration."""
-    schedule = state.scheduler_store.get_by_key("marketing_reports")
-    # Return empty defaults if no schedule exists
-    if not schedule:
-        schedule = {
-            'enabled': False,
-            'recurrence': 'daily',
-            'time_of_day': '07:00',
-            'start_date': datetime.now().strftime("%Y-%m-%d"),
-            'task': 'all',
-            'run_for_days_ago': 1,
-            'next_run': None,
-            'last_status': None,
-            'last_run': None,
-        }
+    """Get scheduler configuration (returns first schedule for legacy compat)."""
+    schedules = state.scheduler_store.list_schedules()
+    schedule = schedules[0] if schedules else {
+        'enabled': False,
+        'recurrence': 'daily',
+        'time_of_day': '07:00',
+        'start_date': datetime.now().strftime("%Y-%m-%d"),
+        'task': 'all',
+        'run_for_days_ago': 1,
+        'next_run': None,
+        'last_status': None,
+        'last_run': None,
+    }
     return jsonify({
         'schedule': schedule,
         'recurrence_choices': list(RECURRENCE_CHOICES),
@@ -421,6 +470,15 @@ def get_all_schedules():
         'schedules': schedules,
         'recurrence_choices': list(RECURRENCE_CHOICES),
     })
+
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['GET'])
+def get_schedule_by_id(schedule_id: int):
+    """Get a single schedule by ID."""
+    schedule = state.scheduler_store.get(schedule_id)
+    if not schedule:
+        return jsonify({'success': False, 'error': 'Schedule not found'}), 404
+    return jsonify({'success': True, 'schedule': schedule})
 
 
 @app.route('/api/schedules/<int:schedule_id>', methods=['DELETE'])
@@ -450,15 +508,20 @@ def toggle_schedule(schedule_id: int):
 
 @app.route('/api/schedule', methods=['POST'])
 def save_schedule():
-    """Save scheduler configuration."""
+    """Save or update a schedule. Supports multiple schedules with unique keys."""
     data = request.json
 
+    name = (data.get('name') or '').strip()
     time_val = data.get('time_of_day', '07:00').strip() or '07:00'
     start_val = data.get('start_date', '').strip() or datetime.now().strftime("%Y-%m-%d")
     recurrence = data.get('recurrence', 'daily')
     task = data.get('task', 'all')
     enabled = data.get('enabled', False)
     days_ago = max(0, int(data.get('run_for_days_ago', 1)))
+    edit_id = data.get('edit_id')  # If editing an existing schedule
+
+    if not name:
+        return jsonify({'success': False, 'error': 'Schedule name is required.'}), 400
 
     # Validate
     try:
@@ -474,9 +537,41 @@ def save_schedule():
     if recurrence not in RECURRENCE_CHOICES:
         return jsonify({'success': False, 'error': f'Invalid recurrence. Use one of: {", ".join(RECURRENCE_CHOICES)}'}), 400
 
+    # Check 30-minute time conflict with other schedules
+    exclude_id = int(edit_id) if edit_id else None
+    conflict = state.scheduler_store.check_time_conflict(
+        time_of_day=time_val,
+        recurrence=recurrence,
+        start_date=start_val,
+        exclude_id=exclude_id,
+        buffer_minutes=30,
+    )
+    if conflict:
+        conflict_name = conflict.get('name', 'Unknown')
+        conflict_time = conflict.get('time_of_day', '??:??')
+        return jsonify({
+            'success': False,
+            'error': f'Time conflict with "{conflict_name}" (runs at {conflict_time}). '
+                     f'Schedules need at least 30 minutes apart.'
+        }), 409
+
+    # Generate unique key from name (or use existing key if editing)
+    import re
+    if edit_id:
+        existing = state.scheduler_store.get(int(edit_id))
+        key = existing['key'] if existing else re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+    else:
+        key = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+        # Ensure unique key
+        base_key = key
+        counter = 1
+        while state.scheduler_store.get_by_key(key):
+            key = f"{base_key}_{counter}"
+            counter += 1
+
     schedule = state.scheduler_store.upsert_schedule(
-        key="marketing_reports",
-        name="Marketing Reports",
+        key=key,
+        name=name,
         task=task,
         recurrence=recurrence,
         time_of_day=time_val,
@@ -500,6 +595,7 @@ def run_task():
     data = request.json
     task = data.get('task', 'all')
     date_str = data.get('date', '')
+    end_date_str = data.get('end_date', '')
 
     parsed = parse_date(date_str)
     if not parsed:
@@ -509,6 +605,16 @@ def run_task():
     state.current_schedule_id = None
     state.current_run_origin = "manual"
 
+    # Handle weekly datads with end date
+    if task == 'datads_weekly' and end_date_str:
+        parsed_end = parse_date(end_date_str)
+        if not parsed_end:
+            return jsonify({'success': False, 'error': 'Invalid end date format.'}), 400
+        _, formatted_end_date = parsed_end
+        start_task_with_date(task, date_obj, formatted_date, origin="manual",
+                             end_date_str=formatted_end_date)
+        return jsonify({'success': True, 'message': f'Started weekly DataAds for {formatted_date} to {formatted_end_date}'})
+
     start_task_with_date(task, date_obj, formatted_date, origin="manual")
 
     return jsonify({'success': True, 'message': f'Started {task} for {formatted_date}'})
@@ -516,16 +622,25 @@ def run_task():
 
 @app.route('/api/run-schedule-now', methods=['POST'])
 def run_schedule_now():
-    """Manually trigger the saved schedule."""
+    """Manually trigger a schedule by ID (or legacy fallback)."""
     if state.running:
         return jsonify({'success': False, 'error': 'A task is already running'}), 409
 
-    schedule = state.scheduler_store.get_by_key("marketing_reports")
+    data = request.json or {}
+    schedule_id = data.get('schedule_id')
+
+    if schedule_id:
+        schedule = state.scheduler_store.get(int(schedule_id))
+    else:
+        # Legacy fallback: run first schedule
+        schedules = state.scheduler_store.list_schedules()
+        schedule = schedules[0] if schedules else None
+
     if not schedule:
-        return jsonify({'success': False, 'error': 'No schedule configured'}), 400
+        return jsonify({'success': False, 'error': 'Schedule not found'}), 400
 
     on_schedule_due(schedule)
-    return jsonify({'success': True, 'message': 'Schedule triggered'})
+    return jsonify({'success': True, 'message': f'Schedule "{schedule.get("name", "")}" triggered'})
 
 
 @app.route('/api/stop', methods=['POST'])

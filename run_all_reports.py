@@ -24,6 +24,12 @@ def run_datads_report(date_obj, date_str):
     return _run_datads(date_obj, date_str)
 
 
+def run_datads_weekly_report(start_date_obj, end_date_obj, start_date_str, end_date_str):
+    """Run the DataAds weekly report extraction with date range."""
+    from datads_data_extractor import run_datads_weekly_report as _run_weekly
+    return _run_weekly(start_date_obj, end_date_obj, start_date_str, end_date_str)
+
+
 def get_date_input():
     """Get date from user or use previous day."""
     print("\n" + "="*80)

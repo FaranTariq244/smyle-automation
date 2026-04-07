@@ -969,6 +969,36 @@
             border-color: var(--accent);
             color: var(--accent);
         }
+        .settings-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin: -20px -24px 20px -24px;
+            padding: 0 24px;
+        }
+        .settings-tab {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 12px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: color 0.15s, border-color 0.15s;
+            white-space: nowrap;
+        }
+        .settings-tab:hover { color: var(--text-primary); }
+        .settings-tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+        .settings-tab svg { flex-shrink: 0; }
+        .settings-tab-panel { display: none; }
+        .settings-tab-panel.active { display: block; }
         .mapping-row {
             display: flex;
             align-items: center;
@@ -1231,9 +1261,9 @@
                             <span class="action-label" id="datads-btn-label">DataAds (Daily)</span>
                             <span class="action-desc" id="datads-btn-desc">DataAds landing pages</span>
                         </button>
-                        <button class="action-btn" id="btn-run-scheduled" onclick="runScheduleNow()">
+                        <button class="action-btn" id="btn-run-scheduled" onclick="runScheduleNow()" title="Triggers the first available schedule">
                             <span class="action-label">Run Scheduled</span>
-                            <span class="action-desc">Trigger schedule now</span>
+                            <span class="action-desc">Trigger first schedule</span>
                         </button>
                         <button class="action-btn" id="btn-setup-browser" onclick="setupBrowser()" style="border-color: var(--warning); color: var(--warning);">
                             <span class="action-label">Setup Browser</span>
@@ -1437,118 +1467,158 @@
             <div id="page-settings" class="page">
                 <div class="page-header">
                     <h2>Settings</h2>
-                    <p>Configure Google Sheets connections</p>
+                    <p>Configure sheets, reports, and column mappings</p>
                 </div>
 
                 <div class="card">
-                    <div class="card-header">
-                        <div>
-                            <div class="card-title">
-                                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 10h18M3 14h18M3 18h18M3 6h18"/></svg>
-                                Marketing Sheet Settings
-                            </div>
-                            <div class="card-subtitle">Stored locally in config.db (seeded from .env on first load)</div>
-                        </div>
-                    </div>
-
-                    <div class="form-row cols-2">
-                        <div class="form-group" style="margin-bottom:0;">
-                            <label class="form-label">SPREAD_SHEET_NAME</label>
-                            <input type="text" id="setting-spreadsheet" class="form-input">
-                        </div>
-                        <div class="form-group" style="margin-bottom:0;">
-                            <label class="form-label">WORK_SHEET_NAME</label>
-                            <input type="text" id="setting-worksheet" class="form-input">
-                        </div>
-                    </div>
-
-                    <div class="form-group" style="margin-top: 16px;">
-                        <label class="form-label">ORDER_TYPE_SHEET_URL</label>
-                        <input type="text" id="setting-ordertype" class="form-input">
-                    </div>
-
-                    <div class="divider"></div>
-
-                    <div class="card-title" style="margin-bottom: 16px;">
-                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 10h18M3 14h18M3 18h18M3 6h18"/></svg>
-                        Daily Add Tracker Sheet
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">DAILY_ADD_TRACKER_SHEET_URL</label>
-                        <input type="text" id="setting-addtracker" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">DATADS_SHEET_URL</label>
-                        <input type="text" id="setting-datads" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
-                    </div>
-
-                    <div class="divider"></div>
-
-                    <div class="btn-group">
-                        <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
-                        <button class="btn btn-secondary" onclick="loadSettings()">Reload</button>
-                    </div>
-                </div>
-
-                <!-- Column Mappings -->
-                <div class="card">
-                    <div class="card-header">
-                        <div>
-                            <div class="card-title">
-                                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
-                                Column Mappings
-                            </div>
-                            <div class="card-subtitle">Configure how extracted fields map to sheet columns</div>
-                        </div>
-                    </div>
-
-                    <!-- Report Selector -->
-                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
-                        <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Report:</span>
-                        <select id="mapping-report-select" class="form-input" style="width:auto; min-width:160px; padding:5px 10px; font-size:12px;" onchange="onMappingReportChange()">
-                            <option value="datads" selected>DataAds</option>
-                        </select>
-                    </div>
-
-                    <!-- Mode Tabs -->
-                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
-                        <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Mode:</span>
-                        <div style="display:flex; gap:4px;">
-                            <button class="btn btn-sm mapping-tab active" id="mapping-tab-daily" onclick="switchMappingTab('daily')">Daily</button>
-                            <button class="btn btn-sm mapping-tab" id="mapping-tab-weekly" onclick="switchMappingTab('weekly')">Weekly</button>
-                        </div>
-                    </div>
-
-                    <!-- Column headers -->
-                    <div style="display:flex; align-items:center; gap:8px; padding:4px 0 6px; border-bottom:1px solid var(--border); margin-bottom:2px;">
-                        <div style="min-width:20px;"></div>
-                        <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Source Field</div>
-                        <div style="width:24px;"></div>
-                        <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Sheet Column</div>
-                        <div style="width:72px;"></div>
-                    </div>
-
-                    <!-- Mapping Rows -->
-                    <div id="mapping-rows-container" style="max-height:460px; overflow-y:auto;">
-                        <!-- Populated by JS -->
-                    </div>
-
-                    <!-- Add Row -->
-                    <div style="padding:8px 0;">
-                        <button class="btn btn-ghost btn-sm" onclick="addMappingRow()" style="font-size:12px; gap:4px;">
-                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"/></svg>
-                            Add field
+                    <!-- Settings Tabs -->
+                    <div class="settings-tabs">
+                        <button class="settings-tab active" onclick="showSettingsTab('sheets')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 10h18M3 14h18M3 18h18M3 6h18"/></svg>
+                            Sheet URLs
+                        </button>
+                        <button class="settings-tab" onclick="showSettingsTab('availability')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                            Report Availability
+                        </button>
+                        <button class="settings-tab" onclick="showSettingsTab('mappings')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+                            Column Mappings
                         </button>
                     </div>
 
-                    <div class="divider"></div>
+                    <!-- Tab 1: Sheet URLs -->
+                    <div class="settings-tab-panel active" id="settings-panel-sheets">
+                        <div class="card-subtitle" style="margin-bottom:16px;">Google Sheets URLs stored locally in config.db</div>
 
-                    <div class="btn-group">
-                        <button class="btn btn-primary" onclick="saveMappings()">Save Mappings</button>
-                        <button class="btn btn-secondary" onclick="resetMappings()">Restore Defaults</button>
-                        <button class="btn btn-secondary" onclick="copyDailyToWeekly()" id="btn-copy-to-weekly" style="display:none;">Copy Daily to Weekly</button>
+                        <div class="form-row cols-2">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label class="form-label">SPREAD_SHEET_NAME</label>
+                                <input type="text" id="setting-spreadsheet" class="form-input">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label class="form-label">WORK_SHEET_NAME</label>
+                                <input type="text" id="setting-worksheet" class="form-input">
+                            </div>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 16px;">
+                            <label class="form-label">ORDER_TYPE_SHEET_URL</label>
+                            <input type="text" id="setting-ordertype" class="form-input">
+                        </div>
+
+                        <div class="form-group" style="margin-top: 16px;">
+                            <label class="form-label">DAILY_ADD_TRACKER_SHEET_URL</label>
+                            <input type="text" id="setting-addtracker" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
+                        </div>
+
+                        <div class="form-group" style="margin-top: 16px;">
+                            <label class="form-label">DATADS_SHEET_URL</label>
+                            <input type="text" id="setting-datads" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+                            <button class="btn btn-secondary" onclick="loadSettings()">Reload</button>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Report Availability -->
+                    <div class="settings-tab-panel" id="settings-panel-availability">
+                        <div class="card-subtitle" style="margin-bottom:16px;">Disable reports to prevent them from running manually or via schedules</div>
+
+                        <div id="report-availability-list" style="display:flex; flex-direction:column; gap:8px;">
+                            <label class="report-list-item" style="padding:10px 14px;">
+                                <input type="checkbox" class="report-avail-chk" value="daily" checked onchange="saveReportAvailability()">
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">Daily Report</span>
+                                    <span class="report-list-item-desc">Looker Studio daily metrics</span>
+                                </div>
+                            </label>
+                            <label class="report-list-item" style="padding:10px 14px;">
+                                <input type="checkbox" class="report-avail-chk" value="order" checked onchange="saveReportAvailability()">
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">Order Type</span>
+                                    <span class="report-list-item-desc">Order breakdown report</span>
+                                </div>
+                            </label>
+                            <label class="report-list-item" style="padding:10px 14px;">
+                                <input type="checkbox" class="report-avail-chk" value="addtracker" checked onchange="saveReportAvailability()">
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">Add Tracker</span>
+                                    <span class="report-list-item-desc">Atria landing pages</span>
+                                </div>
+                            </label>
+                            <label class="report-list-item" style="padding:10px 14px;">
+                                <input type="checkbox" class="report-avail-chk" value="datads" checked onchange="saveReportAvailability()">
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">DataAds (Daily)</span>
+                                    <span class="report-list-item-desc">DataAds daily landing pages</span>
+                                </div>
+                            </label>
+                            <label class="report-list-item" style="padding:10px 14px;">
+                                <input type="checkbox" class="report-avail-chk" value="datads_weekly" checked onchange="saveReportAvailability()">
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">DataAds (Weekly)</span>
+                                    <span class="report-list-item-desc">DataAds weekly date range report</span>
+                                </div>
+                            </label>
+                        </div>
+                        <p style="font-size:11px; color:var(--text-muted); margin-top:10px;">Unchecked reports are disabled and cannot be selected for manual or scheduled runs.</p>
+                    </div>
+
+                    <!-- Tab 3: Column Mappings -->
+                    <div class="settings-tab-panel" id="settings-panel-mappings">
+                        <div class="card-subtitle" style="margin-bottom:16px;">Configure how extracted fields map to sheet columns</div>
+
+                        <!-- Report Selector -->
+                        <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+                            <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Report:</span>
+                            <select id="mapping-report-select" class="form-input" style="width:auto; min-width:160px; padding:5px 10px; font-size:12px;" onchange="onMappingReportChange()">
+                                <option value="datads" selected>DataAds</option>
+                            </select>
+                        </div>
+
+                        <!-- Mode Tabs -->
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+                            <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Mode:</span>
+                            <div style="display:flex; gap:4px;">
+                                <button class="btn btn-sm mapping-tab active" id="mapping-tab-daily" onclick="switchMappingTab('daily')">Daily</button>
+                                <button class="btn btn-sm mapping-tab" id="mapping-tab-weekly" onclick="switchMappingTab('weekly')">Weekly</button>
+                            </div>
+                        </div>
+
+                        <!-- Column headers -->
+                        <div style="display:flex; align-items:center; gap:8px; padding:4px 0 6px; border-bottom:1px solid var(--border); margin-bottom:2px;">
+                            <div style="min-width:20px;"></div>
+                            <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Source Field</div>
+                            <div style="width:24px;"></div>
+                            <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Sheet Column</div>
+                            <div style="width:72px;"></div>
+                        </div>
+
+                        <!-- Mapping Rows -->
+                        <div id="mapping-rows-container" style="max-height:460px; overflow-y:auto;">
+                            <!-- Populated by JS -->
+                        </div>
+
+                        <!-- Add Row -->
+                        <div style="padding:8px 0;">
+                            <button class="btn btn-ghost btn-sm" onclick="addMappingRow()" style="font-size:12px; gap:4px;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"/></svg>
+                                Add field
+                            </button>
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveMappings()">Save Mappings</button>
+                            <button class="btn btn-secondary" onclick="resetMappings()">Restore Defaults</button>
+                            <button class="btn btn-secondary" onclick="copyDailyToWeekly()" id="btn-copy-to-weekly" style="display:none;">Copy Daily to Weekly</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1597,7 +1667,7 @@
                 document.querySelector(`.nav-item[onclick="showPage('reports')"]`)?.classList.add('active');
             }
 
-            if (pageName === 'settings') { loadSettings(); loadMappings(); }
+            if (pageName === 'settings') { loadSettings(); loadMappings(); loadReportAvailability(); showSettingsTab('sheets', true); }
             else if (pageName === 'schedules') { loadSchedule(); loadAllSchedules(); }
 
             // Close mobile sidebar
@@ -2117,6 +2187,21 @@
             }
         }
 
+        // Settings tab switching
+        function showSettingsTab(tabName, skipLoad) {
+            document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelector(`.settings-tab[onclick="showSettingsTab('${tabName}')"]`)?.classList.add('active');
+            const panel = document.getElementById('settings-panel-' + tabName);
+            if (panel) panel.classList.add('active');
+            // Load data for the tab if not already done during page switch
+            if (!skipLoad) {
+                if (tabName === 'sheets') loadSettings();
+                else if (tabName === 'availability') loadReportAvailability();
+                else if (tabName === 'mappings') loadMappings();
+            }
+        }
+
         // Settings handling
         async function loadSettings() {
             try {
@@ -2159,6 +2244,110 @@
             } catch (error) {
                 showToast('Failed to save settings', 'error');
             }
+        }
+
+        // ── Report Availability (disable/deprecate reports) ──
+        let disabledReports = [];
+
+        async function loadReportAvailability() {
+            try {
+                const response = await fetch('/api/disabled-reports');
+                const data = await response.json();
+                disabledReports = data.disabled || [];
+                // Update settings page checkboxes
+                document.querySelectorAll('.report-avail-chk').forEach(cb => {
+                    cb.checked = !disabledReports.includes(cb.value);
+                });
+                applyDisabledReports();
+            } catch (error) {
+                console.error('Failed to load report availability:', error);
+            }
+        }
+
+        async function saveReportAvailability() {
+            const disabled = [];
+            document.querySelectorAll('.report-avail-chk').forEach(cb => {
+                if (!cb.checked) disabled.push(cb.value);
+            });
+            try {
+                const response = await fetch('/api/disabled-reports', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ disabled })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    disabledReports = disabled;
+                    applyDisabledReports();
+                    showToast('Report availability saved', 'success');
+                }
+            } catch (error) {
+                showToast('Failed to save report availability', 'error');
+            }
+        }
+
+        function applyDisabledReports() {
+            // Map report keys to manual run button IDs
+            const btnMap = {
+                daily: 'btn-run-daily',
+                order: 'btn-run-order',
+                addtracker: 'btn-run-addtracker',
+                datads: 'btn-run-datads',
+            };
+            // Disable/enable manual run buttons
+            for (const [key, btnId] of Object.entries(btnMap)) {
+                const btn = document.getElementById(btnId);
+                if (!btn) continue;
+                if (disabledReports.includes(key)) {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.4';
+                    btn.style.pointerEvents = 'none';
+                    btn.title = 'This report is disabled in Settings';
+                } else {
+                    btn.disabled = false;
+                    btn.style.opacity = '';
+                    btn.style.pointerEvents = '';
+                    btn.title = '';
+                }
+            }
+            // Disable weekly mode toggle if datads_weekly is disabled
+            const weeklyModeBtn = document.getElementById('datads-mode-weekly');
+            if (weeklyModeBtn) {
+                if (disabledReports.includes('datads_weekly')) {
+                    weeklyModeBtn.disabled = true;
+                    weeklyModeBtn.style.opacity = '0.4';
+                    weeklyModeBtn.style.pointerEvents = 'none';
+                    // If currently in weekly mode, switch back to daily
+                    if (datadsMode === 'weekly') setDatadsMode('daily');
+                } else {
+                    weeklyModeBtn.disabled = false;
+                    weeklyModeBtn.style.opacity = '';
+                    weeklyModeBtn.style.pointerEvents = '';
+                }
+            }
+
+            // Disable "Run All" if all core reports are disabled
+            const coreReports = ['daily', 'order', 'addtracker', 'datads'];
+            const allDisabled = coreReports.every(r => disabledReports.includes(r));
+            const btnAll = document.getElementById('btn-run-all');
+            if (btnAll) {
+                btnAll.disabled = allDisabled;
+                btnAll.style.opacity = allDisabled ? '0.4' : '';
+                btnAll.style.pointerEvents = allDisabled ? 'none' : '';
+            }
+
+            // Disable schedule report checkboxes
+            document.querySelectorAll('.sched-report-chk').forEach(cb => {
+                const isDisabled = disabledReports.includes(cb.value);
+                cb.disabled = isDisabled;
+                if (isDisabled) {
+                    cb.checked = false;
+                    cb.closest('.report-list-item').style.opacity = '0.4';
+                } else {
+                    cb.closest('.report-list-item').style.opacity = '';
+                }
+            });
+            updateReportCount();
         }
 
         // ── Column Mapping Configuration ──
@@ -2321,6 +2510,8 @@
 
                 document.getElementById('schedule-start').value = new Date().toISOString().split('T')[0];
                 document.getElementById('schedule-time').value = getCurrentTimeHHMM();
+                // Load disabled reports and apply to UI
+                await loadReportAvailability();
             } catch (error) {
                 console.error('Failed to init app:', error);
             }

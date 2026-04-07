@@ -410,6 +410,29 @@ def save_settings_api():
     return jsonify({'success': True, 'message': 'Settings saved'})
 
 
+@app.route('/api/disabled-reports', methods=['GET'])
+def get_disabled_reports():
+    """Get list of disabled/deprecated reports."""
+    import json as _json
+    stored = get_settings(["DISABLED_REPORTS"])
+    raw = stored.get("DISABLED_REPORTS", "")
+    try:
+        disabled = _json.loads(raw) if raw else []
+    except Exception:
+        disabled = []
+    return jsonify({'disabled': disabled})
+
+
+@app.route('/api/disabled-reports', methods=['POST'])
+def save_disabled_reports():
+    """Save list of disabled/deprecated reports."""
+    import json as _json
+    data = request.json
+    disabled = data.get('disabled', [])
+    set_setting("DISABLED_REPORTS", _json.dumps(disabled))
+    return jsonify({'success': True, 'message': 'Report availability saved'})
+
+
 @app.route('/api/datads-mappings', methods=['GET'])
 def get_datads_mappings():
     """Get DataAds column mappings for daily and weekly modes."""
@@ -586,6 +609,17 @@ def save_schedule():
     return jsonify({'success': True, 'schedule': schedule})
 
 
+def _get_disabled_reports():
+    """Return list of disabled report keys."""
+    import json as _json
+    stored = get_settings(["DISABLED_REPORTS"])
+    raw = stored.get("DISABLED_REPORTS", "")
+    try:
+        return _json.loads(raw) if raw else []
+    except Exception:
+        return []
+
+
 @app.route('/api/run', methods=['POST'])
 def run_task():
     """Start a report task."""
@@ -596,6 +630,25 @@ def run_task():
     task = data.get('task', 'all')
     date_str = data.get('date', '')
     end_date_str = data.get('end_date', '')
+
+    # Check for disabled reports
+    disabled = _get_disabled_reports()
+    if disabled:
+        task_parts = [t.strip() for t in task.split(',') if t.strip()]
+        if task == 'all':
+            task_parts = ['daily', 'order', 'addtracker', 'datads']
+        blocked = [t for t in task_parts if t in disabled]
+        if blocked:
+            labels = {'daily': 'Daily Report', 'order': 'Order Type', 'addtracker': 'Add Tracker',
+                      'datads': 'DataAds Daily', 'datads_weekly': 'DataAds Weekly'}
+            names = ', '.join(labels.get(b, b) for b in blocked)
+            return jsonify({'success': False, 'error': f'Disabled report(s): {names}'}), 400
+        # Filter out disabled from "all"
+        if task == 'all':
+            task_parts = [t for t in task_parts if t not in disabled]
+            task = ','.join(task_parts) if task_parts else ''
+            if not task:
+                return jsonify({'success': False, 'error': 'All reports are disabled'}), 400
 
     parsed = parse_date(date_str)
     if not parsed:

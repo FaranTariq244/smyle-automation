@@ -1056,6 +1056,261 @@
             border-color: var(--danger);
         }
 
+        /* ── Run Logs ── */
+        .log-filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .log-filters .form-input {
+            width: auto;
+            min-width: 140px;
+            padding: 7px 12px;
+            font-size: 12px;
+        }
+
+        .log-stat-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .log-stat-card {
+            padding: 14px 16px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .log-stat-card .stat-value {
+            font-size: 22px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+        }
+
+        .log-stat-card .stat-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .log-stat-card.success .stat-value { color: var(--success); }
+        .log-stat-card.failed .stat-value { color: var(--danger); }
+        .log-stat-card.warning .stat-value { color: var(--warning); }
+        .log-stat-card.total .stat-value { color: var(--accent); }
+
+        .log-list-row {
+            display: grid;
+            grid-template-columns: 32px 1fr 120px 100px 80px 80px 90px;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.12s;
+            font-size: 13px;
+        }
+
+        .log-list-row:hover { background: var(--hover-bg); }
+
+        .log-list-row.header {
+            cursor: default;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .log-list-row.header:hover { background: transparent; }
+
+        .log-status-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .log-status-icon.success { background: rgba(52, 211, 153, 0.12); color: var(--success); }
+        .log-status-icon.failed { background: rgba(244, 63, 94, 0.12); color: var(--danger); }
+        .log-status-icon.warning { background: rgba(251, 191, 36, 0.12); color: var(--warning); }
+        .log-status-icon.stopped { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
+        .log-status-icon.incomplete { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
+        .log-status-icon.unknown { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
+
+        .log-task-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .log-task-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .log-error-count {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--danger);
+        }
+
+        .log-error-count.none { color: var(--text-muted); }
+
+        /* Log detail view */
+        .log-detail-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .log-detail-meta {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .log-detail-meta .meta-item {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .log-detail-meta .meta-item strong {
+            color: var(--text-primary);
+        }
+
+        .log-error-list {
+            background: rgba(244, 63, 94, 0.06);
+            border: 1px solid rgba(244, 63, 94, 0.15);
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 16px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .log-error-list h4 {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--danger);
+            margin-bottom: 8px;
+        }
+
+        .log-error-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 4px 0;
+            font-size: 12px;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            color: var(--danger);
+            cursor: pointer;
+        }
+
+        .log-error-item:hover { text-decoration: underline; }
+
+        .log-error-item .line-num {
+            color: var(--text-muted);
+            min-width: 40px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        .log-content-viewer {
+            background: #060a14;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            height: 500px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            font-size: 11.5px;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--text-secondary);
+            counter-reset: log-line;
+        }
+
+        .log-content-viewer::-webkit-scrollbar { width: 6px; }
+        .log-content-viewer::-webkit-scrollbar-track { background: transparent; }
+        .log-content-viewer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        .log-line {
+            display: block;
+            padding: 0 0 0 45px;
+            position: relative;
+            min-height: 1.7em;
+        }
+
+        .log-line::before {
+            content: attr(data-line);
+            position: absolute;
+            left: 0;
+            width: 38px;
+            text-align: right;
+            color: var(--text-muted);
+            opacity: 0.4;
+            font-size: 10px;
+            user-select: none;
+        }
+
+        .log-line.error-line {
+            background: rgba(244, 63, 94, 0.08);
+            color: var(--danger);
+            border-left: 2px solid var(--danger);
+            margin-left: -16px;
+            padding-left: 61px;
+        }
+
+        .log-line.success-line {
+            color: var(--success);
+        }
+
+        .log-line.section-line {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .log-line.highlight-target {
+            background: rgba(56, 189, 248, 0.12);
+            outline: 1px solid rgba(56, 189, 248, 0.3);
+        }
+
+        @media (max-width: 768px) {
+            .log-list-row {
+                grid-template-columns: 28px 1fr 80px 70px;
+            }
+            .log-list-row > :nth-child(5),
+            .log-list-row > :nth-child(6),
+            .log-list-row > :nth-child(7) {
+                display: none;
+            }
+            .log-list-row.header > :nth-child(5),
+            .log-list-row.header > :nth-child(6),
+            .log-list-row.header > :nth-child(7) {
+                display: none;
+            }
+        }
+
         /* ── Responsive ── */
         @media (max-width: 768px) {
             .sidebar {
@@ -1125,6 +1380,11 @@
             <button class="nav-item" onclick="showPage('reports')">
                 <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Run Reports
+            </button>
+
+            <button class="nav-item" onclick="showPage('logs')">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Run Logs
             </button>
 
             <div class="sidebar-section">Manage</div>
@@ -1463,6 +1723,135 @@
                 </div>
             </div>
 
+            <!-- ═══ Run Logs Page ═══ -->
+            <div id="page-logs" class="page">
+                <div class="page-header">
+                    <h2>Run Logs</h2>
+                    <p>View detailed logs for each automation run</p>
+                </div>
+
+                <!-- Log List View -->
+                <div id="logs-list-view">
+                    <!-- Stats -->
+                    <div class="log-stat-cards" id="log-stats">
+                        <div class="log-stat-card total">
+                            <div class="stat-value" id="stat-total">0</div>
+                            <div class="stat-label">Total Runs</div>
+                        </div>
+                        <div class="log-stat-card success">
+                            <div class="stat-value" id="stat-success">0</div>
+                            <div class="stat-label">Successful</div>
+                        </div>
+                        <div class="log-stat-card failed">
+                            <div class="stat-value" id="stat-failed">0</div>
+                            <div class="stat-label">Failed</div>
+                        </div>
+                        <div class="log-stat-card warning">
+                            <div class="stat-value" id="stat-warnings">0</div>
+                            <div class="stat-label">Warnings</div>
+                        </div>
+                    </div>
+
+                    <!-- Filters -->
+                    <div class="card">
+                        <div class="log-filters">
+                            <select id="log-filter-status" class="form-input" onchange="filterLogs()">
+                                <option value="">All statuses</option>
+                                <option value="success">Success</option>
+                                <option value="failed">Failed</option>
+                                <option value="warning">Warning</option>
+                                <option value="stopped">Stopped</option>
+                            </select>
+                            <select id="log-filter-origin" class="form-input" onchange="filterLogs()">
+                                <option value="">All origins</option>
+                                <option value="manual">Manual</option>
+                                <option value="scheduled">Scheduled</option>
+                            </select>
+                            <select id="log-filter-task" class="form-input" onchange="filterLogs()">
+                                <option value="">All reports</option>
+                                <option value="All Reports">All Reports</option>
+                                <option value="Daily Report">Daily Report</option>
+                                <option value="Order Type">Order Type</option>
+                                <option value="Add Tracker">Add Tracker</option>
+                                <option value="DataAds Daily">DataAds Daily</option>
+                                <option value="DataAds Weekly">DataAds Weekly</option>
+                            </select>
+                            <button class="btn btn-secondary btn-sm" onclick="loadLogs()">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H16"/></svg>
+                                Refresh
+                            </button>
+                        </div>
+
+                        <!-- Log List -->
+                        <div class="log-list-row header">
+                            <div></div>
+                            <div>Report</div>
+                            <div>Date / Time</div>
+                            <div>Report Date</div>
+                            <div>Origin</div>
+                            <div>Errors</div>
+                            <div>Size</div>
+                        </div>
+                        <div id="logs-list-container">
+                            <div class="empty-state">
+                                <h3>Loading logs...</h3>
+                            </div>
+                        </div>
+
+                        <!-- Pagination -->
+                        <div id="logs-pagination" style="display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-top:1px solid var(--border);"></div>
+                    </div>
+                </div>
+
+                <!-- Log Detail View (hidden by default) -->
+                <div id="logs-detail-view" style="display:none;">
+                    <div class="log-detail-header">
+                        <div>
+                            <button class="btn btn-secondary btn-sm" onclick="showLogList()" style="margin-bottom:8px;">
+                                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                                Back to list
+                            </button>
+                            <h3 id="log-detail-title" style="font-size:16px; font-weight:700;"></h3>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-danger btn-sm" id="log-detail-delete-btn" onclick="deleteCurrentLog()">Delete</button>
+                        </div>
+                    </div>
+
+                    <div class="log-detail-meta" style="margin-bottom:16px;">
+                        <span class="meta-item"><strong>Status:</strong> <span id="log-detail-status"></span></span>
+                        <span class="meta-item"><strong>Started:</strong> <span id="log-detail-started"></span></span>
+                        <span class="meta-item"><strong>Report Date:</strong> <span id="log-detail-report-date"></span></span>
+                        <span class="meta-item"><strong>Origin:</strong> <span id="log-detail-origin"></span></span>
+                        <span class="meta-item"><strong>Size:</strong> <span id="log-detail-size"></span></span>
+                    </div>
+
+                    <!-- Error Summary -->
+                    <div id="log-detail-errors" class="log-error-list" style="display:none;">
+                        <h4 id="log-detail-error-title">Errors Found</h4>
+                        <div id="log-detail-error-items"></div>
+                    </div>
+
+                    <!-- Log Content -->
+                    <div class="card" style="padding:0;">
+                        <div style="padding:12px 16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:12px; font-weight:600; color:var(--text-secondary);">Log Output</span>
+                            <div class="btn-group">
+                                <button class="btn btn-ghost btn-sm" onclick="toggleLineNumbers()" title="Toggle line numbers">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                                    Lines
+                                </button>
+                                <button class="btn btn-ghost btn-sm" onclick="jumpToNextError()" id="btn-next-error" title="Jump to next error">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                                    Next Error
+                                </button>
+                            </div>
+                        </div>
+                        <div class="log-content-viewer" id="log-content-viewer"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- ═══ Settings Page ═══ -->
             <div id="page-settings" class="page">
                 <div class="page-header">
@@ -1669,6 +2058,7 @@
 
             if (pageName === 'settings') { loadSettings(); loadMappings(); loadReportAvailability(); showSettingsTab('sheets', true); }
             else if (pageName === 'schedules') { loadSchedule(); loadAllSchedules(); }
+            else if (pageName === 'logs') { loadLogs(); showLogList(); }
 
             // Close mobile sidebar
             document.getElementById('sidebar').classList.remove('open');
@@ -2489,6 +2879,301 @@
             ));
             if (currentMappingTab === 'weekly') renderMappingTable();
             showToast('Daily mappings copied to weekly (click Save to persist)', 'info');
+        }
+
+        // ── Run Logs ──
+        let currentPageLogs = [];
+        let currentLogFilename = '';
+        let currentLogErrors = [];
+        let currentErrorIdx = -1;
+        let showLineNumbers = true;
+        let logCurrentPage = 1;
+        let logTotalPages = 1;
+        const LOG_PER_PAGE = 20;
+
+        async function loadLogs(page) {
+            if (page !== undefined) logCurrentPage = page;
+            const status = document.getElementById('log-filter-status').value;
+            const origin = document.getElementById('log-filter-origin').value;
+            const task = document.getElementById('log-filter-task').value;
+
+            const params = new URLSearchParams({
+                page: logCurrentPage,
+                per_page: LOG_PER_PAGE,
+            });
+            if (status) params.set('status', status);
+            if (origin) params.set('origin', origin);
+            if (task) params.set('task', task);
+
+            try {
+                const response = await fetch('/api/logs?' + params.toString());
+                const data = await response.json();
+
+                logCurrentPage = data.page;
+                logTotalPages = data.total_pages;
+
+                // Update stats
+                const s = data.stats || {};
+                document.getElementById('stat-total').textContent = s.total || 0;
+                document.getElementById('stat-success').textContent = s.success || 0;
+                document.getElementById('stat-failed').textContent = s.failed || 0;
+                document.getElementById('stat-warnings').textContent = s.warning || 0;
+
+                currentPageLogs = data.logs || [];
+                renderLogList(currentPageLogs);
+                renderLogPagination(data.page, data.total_pages, data.total);
+            } catch (error) {
+                showToast('Failed to load logs', 'error');
+            }
+        }
+
+        function filterLogs() {
+            logCurrentPage = 1;
+            loadLogs();
+        }
+
+        function getStatusIcon(status) {
+            const icons = {
+                success: '&#10003;',
+                failed: '&#10007;',
+                warning: '&#9888;',
+                stopped: '&#9632;',
+                incomplete: '&#8943;',
+                unknown: '?',
+            };
+            return icons[status] || '?';
+        }
+
+        function getStatusLabel(status) {
+            const labels = {
+                success: 'Success',
+                failed: 'Failed',
+                warning: 'Warning',
+                stopped: 'Stopped',
+                incomplete: 'Incomplete',
+                unknown: 'Unknown',
+            };
+            return labels[status] || status;
+        }
+
+        function renderLogList(logs) {
+            const container = document.getElementById('logs-list-container');
+
+            if (logs.length === 0) {
+                container.innerHTML = '<div class="empty-state"><h3>No logs found</h3><p>Run a report to generate logs, or adjust your filters.</p></div>';
+                return;
+            }
+
+            container.innerHTML = logs.map(l => `
+                <div class="log-list-row" onclick="viewLog('${escapeHtml(l.filename)}')">
+                    <div class="log-status-icon ${l.status}">${getStatusIcon(l.status)}</div>
+                    <div>
+                        <div class="log-task-name">${escapeHtml(l.task)}</div>
+                        <div class="log-task-sub">${escapeHtml(l.filename)}</div>
+                    </div>
+                    <div style="font-size:12px; font-family:'JetBrains Mono','Consolas',monospace; color:var(--text-secondary);">${escapeHtml(l.started)}</div>
+                    <div style="font-size:12px; color:var(--text-secondary);">${escapeHtml(l.report_date)}</div>
+                    <div>
+                        <span class="badge ${l.origin === 'scheduled' ? 'badge-accent' : 'badge-secondary'}">${escapeHtml(l.origin)}</span>
+                    </div>
+                    <div>
+                        <span class="log-error-count ${l.error_count === 0 ? 'none' : ''}">${l.error_count > 0 ? l.error_count + ' errors' : 'None'}</span>
+                    </div>
+                    <div style="font-size:12px; color:var(--text-muted);">${l.size_kb} KB</div>
+                </div>
+            `).join('');
+        }
+
+        function renderLogPagination(page, totalPages, totalItems) {
+            const container = document.getElementById('logs-pagination');
+            if (totalPages <= 1) {
+                container.innerHTML = `<span style="font-size:12px; color:var(--text-muted);">${totalItems} log${totalItems !== 1 ? 's' : ''}</span>`;
+                return;
+            }
+
+            let buttons = [];
+
+            // Previous
+            buttons.push(`<button class="btn btn-secondary btn-sm" ${page <= 1 ? 'disabled' : ''} onclick="loadLogs(${page - 1})">
+                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></svg>
+            </button>`);
+
+            // Page numbers (show max 7 pages with ellipsis)
+            const maxVisible = 7;
+            let startP = Math.max(1, page - Math.floor(maxVisible / 2));
+            let endP = Math.min(totalPages, startP + maxVisible - 1);
+            if (endP - startP < maxVisible - 1) startP = Math.max(1, endP - maxVisible + 1);
+
+            if (startP > 1) {
+                buttons.push(`<button class="btn btn-secondary btn-sm" onclick="loadLogs(1)">1</button>`);
+                if (startP > 2) buttons.push(`<span style="color:var(--text-muted); padding:0 4px;">...</span>`);
+            }
+
+            for (let i = startP; i <= endP; i++) {
+                if (i === page) {
+                    buttons.push(`<button class="btn btn-primary btn-sm" disabled>${i}</button>`);
+                } else {
+                    buttons.push(`<button class="btn btn-secondary btn-sm" onclick="loadLogs(${i})">${i}</button>`);
+                }
+            }
+
+            if (endP < totalPages) {
+                if (endP < totalPages - 1) buttons.push(`<span style="color:var(--text-muted); padding:0 4px;">...</span>`);
+                buttons.push(`<button class="btn btn-secondary btn-sm" onclick="loadLogs(${totalPages})">${totalPages}</button>`);
+            }
+
+            // Next
+            buttons.push(`<button class="btn btn-secondary btn-sm" ${page >= totalPages ? 'disabled' : ''} onclick="loadLogs(${page + 1})">
+                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+            </button>`);
+
+            container.innerHTML = `
+                <span style="font-size:12px; color:var(--text-muted);">Showing ${(page-1)*LOG_PER_PAGE + 1}-${Math.min(page*LOG_PER_PAGE, totalItems)} of ${totalItems}</span>
+                <div style="display:flex; gap:4px; align-items:center;">${buttons.join('')}</div>
+            `;
+        }
+
+        async function viewLog(filename) {
+            currentLogFilename = filename;
+            currentErrorIdx = -1;
+
+            // Find log metadata
+            const meta = currentPageLogs.find(l => l.filename === filename) || {};
+
+            // Show detail view
+            document.getElementById('logs-list-view').style.display = 'none';
+            document.getElementById('logs-detail-view').style.display = 'block';
+
+            // Set header info
+            document.getElementById('log-detail-title').textContent = meta.task || filename;
+            document.getElementById('log-detail-status').innerHTML = `<span class="badge ${getStatusBadgeClass(meta.status)}">${getStatusLabel(meta.status)}</span>`;
+            document.getElementById('log-detail-started').textContent = meta.started || 'Unknown';
+            document.getElementById('log-detail-report-date').textContent = meta.report_date || 'Unknown';
+            document.getElementById('log-detail-origin').textContent = meta.origin || 'Unknown';
+
+            // Load log content
+            document.getElementById('log-content-viewer').innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
+
+            try {
+                const response = await fetch(`/api/logs/${encodeURIComponent(filename)}`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    document.getElementById('log-content-viewer').textContent = 'Error: ' + data.error;
+                    return;
+                }
+
+                document.getElementById('log-detail-size').textContent = data.size_kb + ' KB';
+                currentLogErrors = data.errors || [];
+
+                // Render errors panel
+                const errorsPanel = document.getElementById('log-detail-errors');
+                const errorsItems = document.getElementById('log-detail-error-items');
+                const errorTitle = document.getElementById('log-detail-error-title');
+                const nextErrorBtn = document.getElementById('btn-next-error');
+
+                if (currentLogErrors.length > 0) {
+                    errorsPanel.style.display = 'block';
+                    errorTitle.textContent = `${currentLogErrors.length} Error${currentLogErrors.length > 1 ? 's' : ''} Found`;
+                    errorsItems.innerHTML = currentLogErrors.slice(0, 50).map(e =>
+                        `<div class="log-error-item" onclick="scrollToLogLine(${e.line})">
+                            <span class="line-num">L${e.line}</span>
+                            <span>${escapeHtml(e.text)}</span>
+                        </div>`
+                    ).join('');
+                    nextErrorBtn.style.display = '';
+                } else {
+                    errorsPanel.style.display = 'none';
+                    nextErrorBtn.style.display = 'none';
+                }
+
+                // Render log content with syntax highlighting
+                renderLogContent(data.content, data.errors);
+
+            } catch (error) {
+                document.getElementById('log-content-viewer').textContent = 'Failed to load log file.';
+            }
+        }
+
+        function renderLogContent(content, errors) {
+            const viewer = document.getElementById('log-content-viewer');
+            const errorLines = new Set((errors || []).map(e => e.line));
+            const lines = content.split('\n');
+
+            const html = lines.map((line, i) => {
+                const lineNum = i + 1;
+                let cls = 'log-line';
+
+                // Classify line
+                if (errorLines.has(lineNum)) {
+                    cls += ' error-line';
+                } else if (/completed successfully|success|\[success\]/i.test(line)) {
+                    cls += ' success-line';
+                } else if (/^[█▀▄═]{4,}|^REPORT \d|^={20,}/i.test(line) || /REPORT \d+ OF \d+/.test(line)) {
+                    cls += ' section-line';
+                }
+
+                const lineAttr = showLineNumbers ? `data-line="${lineNum}"` : '';
+                return `<span class="${cls}" ${lineAttr} id="log-line-${lineNum}">${escapeHtml(line) || ' '}</span>`;
+            }).join('\n');
+
+            viewer.innerHTML = html;
+        }
+
+        function scrollToLogLine(lineNum) {
+            const el = document.getElementById('log-line-' + lineNum);
+            if (!el) return;
+
+            // Remove previous highlight
+            document.querySelectorAll('.log-line.highlight-target').forEach(e => e.classList.remove('highlight-target'));
+            el.classList.add('highlight-target');
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function jumpToNextError() {
+            if (currentLogErrors.length === 0) return;
+            currentErrorIdx = (currentErrorIdx + 1) % currentLogErrors.length;
+            scrollToLogLine(currentLogErrors[currentErrorIdx].line);
+        }
+
+        function toggleLineNumbers() {
+            showLineNumbers = !showLineNumbers;
+            // Re-render if a log is currently displayed
+            const viewer = document.getElementById('log-content-viewer');
+            if (viewer.innerHTML && currentLogFilename) {
+                document.querySelectorAll('.log-line').forEach(el => {
+                    if (showLineNumbers) {
+                        el.setAttribute('data-line', el.id.replace('log-line-', ''));
+                    } else {
+                        el.removeAttribute('data-line');
+                    }
+                });
+            }
+        }
+
+        function showLogList() {
+            document.getElementById('logs-list-view').style.display = '';
+            document.getElementById('logs-detail-view').style.display = 'none';
+            currentLogFilename = '';
+        }
+
+        async function deleteCurrentLog() {
+            if (!currentLogFilename) return;
+            if (!confirm('Delete this log file? This cannot be undone.')) return;
+
+            try {
+                const response = await fetch(`/api/logs/${encodeURIComponent(currentLogFilename)}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (data.success) {
+                    showToast('Log deleted', 'success');
+                    showLogList();
+                    loadLogs();
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to delete log', 'error');
+            }
         }
 
         // Helper

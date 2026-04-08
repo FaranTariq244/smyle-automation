@@ -776,6 +776,195 @@ def get_previous_day():
     return jsonify({'date': date_obj.strftime("%d-%b-%Y")})
 
 
+@app.route('/api/logs')
+def list_logs():
+    """List log files with parsed metadata, pagination, and server-side filtering.
+
+    Query params:
+        page (int)   - 1-based page number (default 1)
+        per_page (int) - items per page (default 20, max 100)
+        status (str) - filter by status (success/failed/warning/stopped)
+        origin (str) - filter by origin (manual/scheduled)
+        task (str)   - filter by display task name
+    """
+    import re as _re
+
+    page = max(1, request.args.get("page", 1, type=int))
+    per_page = min(100, max(1, request.args.get("per_page", 20, type=int)))
+    filter_status = request.args.get("status", "").strip()
+    filter_origin = request.args.get("origin", "").strip()
+    filter_task = request.args.get("task", "").strip()
+
+    task_labels = {
+        "all_reports": "All Reports",
+        "daily_report": "Daily Report",
+        "order_type_report": "Order Type",
+        "daily_add_tracker": "Add Tracker",
+        "datads_daily": "DataAds Daily",
+        "datads_weekly": "DataAds Weekly",
+    }
+
+    # Build full list (metadata only - we read just enough of each file)
+    all_logs = []
+    for f in sorted(state.log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        stat = f.stat()
+        size_kb = round(stat.st_size / 1024, 1)
+
+        name = f.stem
+        origin = "unknown"
+        task = name
+        timestamp_str = ""
+
+        ts_match = _re.search(r'_(\d{8}_\d{6})$', name)
+        if ts_match:
+            timestamp_str = ts_match.group(1)
+            prefix = name[:ts_match.start()]
+            if prefix.startswith("manual_"):
+                origin = "manual"
+                task = prefix[7:]
+            elif prefix.startswith("scheduled_"):
+                origin = "scheduled"
+                task = prefix[10:]
+            else:
+                task = prefix
+
+        task_display = task_labels.get(task, task.replace("_", " ").title())
+
+        # Quick filter on origin and task before reading file content
+        if filter_origin and origin != filter_origin:
+            continue
+        if filter_task and task_display != filter_task:
+            continue
+
+        # Read file to detect status and errors
+        status = "unknown"
+        header_lines = []
+        error_count = 0
+        try:
+            with f.open("r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+                header_lines = content.split("\n")[:3]
+                for line in content.split("\n"):
+                    ll = line.lower()
+                    if any(kw in ll for kw in ["error", "failed", "exception", "traceback", "\u2717"]):
+                        error_count += 1
+                content_lower = content.lower()
+                if "completed successfully" in content_lower or "report completed successfully" in content_lower.replace("\n", " "):
+                    status = "success" if error_count == 0 else "warning"
+                elif "stopped by user" in content_lower:
+                    status = "stopped"
+                elif "finished with issues" in content_lower or error_count > 0:
+                    status = "failed"
+                elif stat.st_size < 500:
+                    status = "incomplete"
+                else:
+                    status = "success"
+        except Exception:
+            pass
+
+        if filter_status and status != filter_status:
+            continue
+
+        started = ""
+        if timestamp_str:
+            try:
+                dt = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+                started = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+
+        report_date = ""
+        if header_lines:
+            date_match = _re.search(r'for (\d{1,2}-\w{3}-\d{4})', header_lines[0])
+            if date_match:
+                report_date = date_match.group(1)
+
+        all_logs.append({
+            "filename": f.name,
+            "origin": origin,
+            "task": task_display,
+            "started": started,
+            "report_date": report_date,
+            "size_kb": size_kb,
+            "status": status,
+            "error_count": error_count,
+        })
+
+    # Stats (computed from the filtered list)
+    total = len(all_logs)
+    stats = {
+        "total": total,
+        "success": sum(1 for l in all_logs if l["status"] == "success"),
+        "failed": sum(1 for l in all_logs if l["status"] == "failed"),
+        "warning": sum(1 for l in all_logs if l["status"] == "warning"),
+    }
+
+    # Paginate
+    total_pages = max(1, -(-total // per_page))  # ceil division
+    start = (page - 1) * per_page
+    page_logs = all_logs[start : start + per_page]
+
+    return jsonify({
+        "logs": page_logs,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "stats": stats,
+    })
+
+
+@app.route('/api/logs/<filename>')
+def get_log_content(filename: str):
+    """Read a specific log file's content."""
+    import re as _re
+    # Sanitize filename to prevent path traversal
+    safe_name = Path(filename).name
+    if safe_name != filename or ".." in filename:
+        return jsonify({"success": False, "error": "Invalid filename"}), 400
+
+    log_path = state.log_dir / safe_name
+    if not log_path.exists():
+        return jsonify({"success": False, "error": "Log file not found"}), 404
+
+    try:
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+
+        # Find error lines with line numbers
+        errors = []
+        for i, line in enumerate(content.split("\n"), 1):
+            ll = line.lower()
+            if any(kw in ll for kw in ["error", "failed", "exception", "traceback", "✗"]):
+                errors.append({"line": i, "text": line.strip()})
+
+        return jsonify({
+            "success": True,
+            "content": content,
+            "errors": errors,
+            "size_kb": round(log_path.stat().st_size / 1024, 1),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/logs/<filename>', methods=['DELETE'])
+def delete_log(filename: str):
+    """Delete a specific log file."""
+    safe_name = Path(filename).name
+    if safe_name != filename or ".." in filename:
+        return jsonify({"success": False, "error": "Invalid filename"}), 400
+
+    log_path = state.log_dir / safe_name
+    if not log_path.exists():
+        return jsonify({"success": False, "error": "Log file not found"}), 404
+
+    try:
+        log_path.unlink()
+        return jsonify({"success": True, "message": "Log deleted"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route('/api/setup-browser', methods=['POST'])
 def setup_browser():
     """Open a visible Chrome browser with the same profile for manual login setup."""

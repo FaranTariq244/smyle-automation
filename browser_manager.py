@@ -95,8 +95,10 @@ class BrowserManager:
         if not os.path.exists(self.profile_dir):
             os.makedirs(self.profile_dir)
 
-    def start_browser(self, headless=True):
-        """Start Chrome browser."""
+    def start_browser(self, headless=None):
+        """Start Chrome browser. If headless is None, reads HEADLESS_MODE env var (default: True)."""
+        if headless is None:
+            headless = os.environ.get("HEADLESS_MODE", "1") != "0"
         
         # Always kill existing first
         self._kill_existing_chrome()

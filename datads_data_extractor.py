@@ -72,7 +72,7 @@ class DataAdsDataExtractor:
         """Navigate to the DataAds report page for the given date (range)."""
         url = self.build_report_url(date_obj, end_date_obj)
         print(f"[NAV] Navigating to DataAds report...")
-        print(f"[NAV] URL: {url[:120]}...")
+        print(f"[NAV] URL: {url}")
         self.driver.get(url)
         time.sleep(5)
 

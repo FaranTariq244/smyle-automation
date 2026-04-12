@@ -308,7 +308,7 @@ def _task_display_name(task: str) -> str:
 
 
 def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: str,
-                         end_date_str: str = ""):
+                         end_date_str: str = "", headless: bool = True):
     """Start a task with a specific date (and optional end date for weekly)."""
     task_name = _task_display_name(task)
     display_date = f"{date_str} to {end_date_str}" if end_date_str else date_str
@@ -329,6 +329,8 @@ def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: s
     # Launch subprocess
     code = build_subprocess_code(task, date_str, end_date_str=end_date_str)
     cmd = [sys.executable, "-u", "-c", code]
+    env = build_subprocess_env()
+    env["HEADLESS_MODE"] = "1" if headless else "0"
     try:
         proc = subprocess.Popen(
             cmd,
@@ -339,7 +341,7 @@ def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: s
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            env=build_subprocess_env(),
+            env=env,
         )
         state.current_process = proc
         state.current_pid = proc.pid
@@ -630,6 +632,7 @@ def run_task():
     task = data.get('task', 'all')
     date_str = data.get('date', '')
     end_date_str = data.get('end_date', '')
+    headless = data.get('headless', True)
 
     # Check for disabled reports
     disabled = _get_disabled_reports()
@@ -665,10 +668,10 @@ def run_task():
             return jsonify({'success': False, 'error': 'Invalid end date format.'}), 400
         _, formatted_end_date = parsed_end
         start_task_with_date(task, date_obj, formatted_date, origin="manual",
-                             end_date_str=formatted_end_date)
+                             end_date_str=formatted_end_date, headless=headless)
         return jsonify({'success': True, 'message': f'Started weekly DataAds for {formatted_date} to {formatted_end_date}'})
 
-    start_task_with_date(task, date_obj, formatted_date, origin="manual")
+    start_task_with_date(task, date_obj, formatted_date, origin="manual", headless=headless)
 
     return jsonify({'success': True, 'message': f'Started {task} for {formatted_date}'})
 

@@ -106,11 +106,11 @@ def run_daily_report(date_obj, date_str):
             while "accounts.google.com" in driver.current_url:
                 time.sleep(2)
             print("✓ Login successful")
-            # Switch back to headless after login (cookies saved in profile)
+            # Switch back after login (cookies saved in profile) - respects HEADLESS_MODE env var
             manager.close()
             time.sleep(2)
             manager = BrowserManager(use_existing_chrome=False)
-            driver = manager.start_browser(headless=True)
+            driver = manager.start_browser()
             driver.get(REPORT_URL)
             time.sleep(5)
 
@@ -209,11 +209,11 @@ def run_order_type_report(date_obj, date_str):
             while "accounts.google.com" in driver.current_url:
                 time.sleep(2)
             print("✓ Login successful")
-            # Switch back to headless after login (cookies saved in profile)
+            # Switch back after login (cookies saved in profile) - respects HEADLESS_MODE env var
             manager.close()
             time.sleep(2)
             manager = BrowserManager(use_existing_chrome=False)
-            driver = manager.start_browser(headless=True)
+            driver = manager.start_browser()
             driver.get(ORDER_TYPE_URL)
             time.sleep(5)
 

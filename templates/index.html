@@ -1473,6 +1473,15 @@
                         </div>
                     </div>
 
+                    <!-- Browser Mode Toggle -->
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+                        <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Browser Mode:</span>
+                        <div style="display:flex; gap:4px;">
+                            <button class="btn btn-sm datads-mode-btn active" id="browser-mode-headless" onclick="setBrowserMode('headless')">Headless</button>
+                            <button class="btn btn-sm datads-mode-btn" id="browser-mode-visible" onclick="setBrowserMode('visible')">Visible</button>
+                        </div>
+                    </div>
+
                     <div class="form-row cols-2">
                         <div class="form-group" style="margin-bottom:0;">
                             <label class="form-label" id="date-label-start">Date (DD-MMM-YYYY)</label>
@@ -2168,7 +2177,7 @@
                 const response = await fetch('/api/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ task, date: dateInput })
+                    body: JSON.stringify({ task, date: dateInput, headless: browserMode === 'headless' })
                 });
 
                 const data = await response.json();
@@ -2181,6 +2190,15 @@
             } catch (error) {
                 showToast('Failed to start task', 'error');
             }
+        }
+
+        // ── Browser mode handling ──
+        let browserMode = 'headless';
+
+        function setBrowserMode(mode) {
+            browserMode = mode;
+            document.getElementById('browser-mode-headless').classList.toggle('active', mode === 'headless');
+            document.getElementById('browser-mode-visible').classList.toggle('active', mode === 'visible');
         }
 
         // ── DataAds mode handling ──
@@ -2230,7 +2248,8 @@
                         body: JSON.stringify({
                             task: 'datads_weekly',
                             date: dateInput,
-                            end_date: endDateInput
+                            end_date: endDateInput,
+                            headless: browserMode === 'headless'
                         })
                     });
                     const data = await response.json();

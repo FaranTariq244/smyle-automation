@@ -36,19 +36,24 @@ def write_marketing_data(date_obj, overall_data: Dict, facebook_data: Dict, goog
             google_data={...}
         )
     """
-    # Extract day number
+    # Extract day number and full date
     if isinstance(date_obj, datetime):
         day = date_obj.day
+        full_date = date_obj.strftime("%d/%m/%Y")
     else:
         # If it's a string, try to parse it
         try:
-            day = datetime.strptime(str(date_obj), "%Y-%m-%d").day
+            parsed = datetime.strptime(str(date_obj), "%Y-%m-%d")
+            day = parsed.day
+            full_date = parsed.strftime("%d/%m/%Y")
         except:
             day = date_obj  # Assume it's already a day number
+            full_date = ""
 
     # Map data to column structure using EXACT column names from columns.py
     row = {
-        "": "",  # Columns A, B, C (empty placeholders)
+        "": "",  # Columns A, B (empty placeholders)
+        "Date": full_date,  # Column C - full date dd/mm/yyyy
         "Days": day,  # Column D
 
         # Overall metrics (Columns E-I)

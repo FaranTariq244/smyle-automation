@@ -28,7 +28,8 @@ def ensure_headers():
 
 def append_rows(rows: List[Dict]):
     """
-    Append rows to the worksheet.
+    Write rows to the worksheet. If a row with the same date (Column C) already
+    exists, updates that row. Otherwise appends a new row.
 
     Args:
         rows: List of dictionaries where keys MUST match COLUMNS exactly.
@@ -36,17 +37,12 @@ def append_rows(rows: List[Dict]):
               Keys not in COLUMNS are ignored.
               The order of values follows COLUMNS order (not dict order).
 
-    Example:
-        append_rows([
-            {"Email": "test@example.com", "Username": "testuser"},
-            {"Email": "other@example.com", "Username": "otheruser"}
-        ])
-
     The function:
     1. Ensures headers are correct
     2. Converts each dict to a list of values aligned to COLUMNS
-    3. Finds the first empty row based on Column E (Conversion data column)
-    4. Appends the values starting from that row (ignoring formatting-only rows)
+    3. For each row, checks if Column C (Date) already has a matching date
+       - If found: updates that existing row (prevents duplicates)
+       - If not found: appends to the first empty row
     """
     import time
 
@@ -54,34 +50,49 @@ def append_rows(rows: List[Dict]):
     ensure_headers()
     values = [[row.get(col, "") for col in COLUMNS] for row in rows]
 
-    # Find the first empty row in Column E (index 4 in COLUMNS - "Conversion (<4 = red, 4-5 = orange, 5 > green)")
-    # This ensures we ignore rows that only have formatting but no actual data
-    # Column E is the 5th column (A=1, B=2, C=3, D=4, E=5)
-    column_e_values = ws.col_values(5)  # Column E
+    # Read Column C (Date) to check for existing entries
+    column_c_values = ws.col_values(3)  # Column C = Date
 
-    # Find first empty cell in Column E (skip header row)
-    start_row = 2  # Start from row 2 (after header)
-    for idx, value in enumerate(column_e_values[1:], start=2):  # Skip header at index 0
-        if not value or str(value).strip() == "":
-            start_row = idx
-            break
-    else:
-        # If all cells have values, append after the last row
-        start_row = len(column_e_values) + 1
+    for row_values in values:
+        row_date = str(row_values[2]).strip()  # Column C is index 2 (Date)
 
-    # Retry logic for handling temporary Google Sheets API errors
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            ws.update(f"A{start_row}", values, value_input_option='USER_ENTERED')
-            break  # Success - exit retry loop
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 2  # 2, 4, 6 seconds
-                print(f"  ⚠️  Retry {attempt + 1}/{max_retries} - waiting {wait_time}s...")
-                time.sleep(wait_time)
+        # Check if this date already exists in the sheet
+        existing_row = None
+        if row_date:
+            for idx, cell_value in enumerate(column_c_values[1:], start=2):  # Skip header
+                if str(cell_value).strip() == row_date:
+                    existing_row = idx
+                    break
+
+        if existing_row:
+            # Update the existing row
+            print(f"  [SHEET] Date {row_date} found at row {existing_row} - updating existing row")
+            target_row = existing_row
+        else:
+            # Find the first empty row in Column E (Conversion data column)
+            column_e_values = ws.col_values(5)  # Column E
+            target_row = 2  # Start from row 2 (after header)
+            for idx, value in enumerate(column_e_values[1:], start=2):
+                if not value or str(value).strip() == "":
+                    target_row = idx
+                    break
             else:
-                raise  # Final attempt failed - re-raise the exception
+                target_row = len(column_e_values) + 1
+            print(f"  [SHEET] Date {row_date} not found - writing to new row {target_row}")
+
+        # Write with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                ws.update(f"A{target_row}", [row_values], value_input_option='USER_ENTERED')
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"  Retry {attempt + 1}/{max_retries} - waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise
 
 
 def read_all() -> List[Dict]:

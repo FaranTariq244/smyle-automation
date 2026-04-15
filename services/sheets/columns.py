@@ -4,7 +4,8 @@ IMPORTANT: This is the single source of truth for column headers.
 Do not modify the order or labels without updating this file.
 
 Column mapping:
-- Column D = Day
+- Column C = Full date (dd/mm/yyyy)
+- Column D = Day number
 - Column E = Conversion % of overall
 - Column F = Spend of overall
 - Column G = ROAS of overall
@@ -22,12 +23,11 @@ Column mapping:
 - Column S = Conversions of Google
 """
 
-# Columns A, B, C are assumed to exist before column D
-# Adjust if your sheet has different columns before "Day"
+# Columns A, B are placeholders; C has full date; D has day number
 COLUMNS = [
     "",  # Column A (placeholder - adjust if needed)
     "",  # Column B (placeholder - adjust if needed)
-    "",  # Column C (placeholder - adjust if needed)
+    "Date",  # Column C - full date (dd/mm/yyyy)
     "Days",  # Column D
     "Conversion (<4 = red, 4-5 = orange, 5 > green)",  # Column E
     "Total spend per day",  # Column F

@@ -97,8 +97,9 @@ class LookerDataExtractor:
                 try:
                     date_button = self.driver.find_element(By.XPATH, "//div[contains(@class, 'date-text')]")
                 except:
-                    # Last resort: find by date pattern
-                    elements = self.driver.find_elements(By.XPATH, "//*[contains(text(), '2025')]")
+                    # Last resort: find by date pattern (current year)
+                    current_year = str(datetime.now().year)
+                    elements = self.driver.find_elements(By.XPATH, f"//*[contains(text(), '{current_year}')]")
                     for elem in elements:
                         try:
                             if elem.is_displayed() and elem.location['y'] < 400:
@@ -116,7 +117,7 @@ class LookerDataExtractor:
                 self._set_calendar_dates(start_date, end_date)
 
         except Exception as e:
-            pass
+            print(f"  [ERROR] Date range selection failed: {e}")
 
     def _set_calendar_dates(self, start_date, end_date):
         """Internal method to set specific dates by clicking on calendar."""
@@ -214,7 +215,7 @@ class LookerDataExtractor:
                     continue
 
         except Exception as e:
-            pass
+            print(f"  [ERROR] Calendar date selection failed: {e}")
 
     def select_medium(self, medium_name):
         """
@@ -296,7 +297,7 @@ class LookerDataExtractor:
                         time.sleep(1.5)
 
             except Exception as e:
-                pass
+                print(f"  [ERROR] Checkbox management failed: {e}")
 
             # Close the dropdown to apply the filter
             time.sleep(1)
@@ -313,11 +314,15 @@ class LookerDataExtractor:
             time.sleep(8)
 
         except Exception as e:
-            pass
+            print(f"  [ERROR] Medium filter selection failed: {e}")
 
     def extract_metrics(self):
         """
-        Extract the main KPI metrics from the page.
+        Extract the main KPI metrics from the Looker Studio page.
+
+        Uses Looker Studio's DOM structure: each KPI is a scorecard component
+        with a .kpi-label (metric name) and .value-label (the value).
+        Falls back to parent-sibling traversal if CSS selectors fail.
 
         Returns:
             dict: Dictionary with metric names and values
@@ -339,67 +344,114 @@ class LookerDataExtractor:
         time.sleep(3)  # Wait for data to render
 
         try:
-            # NEW STRATEGY: Extract from specific Y coordinates where KPI values are located
-            # Based on testing, the values are around Y=259
-            script = """
-                let allElements = document.querySelectorAll('*');
-                let labels = [];
-                let values = [];
+            # DOM-BASED STRATEGY using Looker Studio's scorecard structure:
+            # Each KPI is in a .scorecard-component with:
+            #   .kpi-label  -> metric name (e.g., "Spend")
+            #   .value-label -> metric value (e.g., "120.43K €")
+            # This approach is immune to layout/pixel changes.
+            script = r"""
+                var results = {};
+                var debug = {matched: [], method: 'none', scorecards: 0};
 
-                // First pass: find labels (around Y=200-240)
-                // Second pass: find values (around Y=250-280)
-                allElements.forEach(el => {
-                    let rect = el.getBoundingClientRect();
-                    let text = el.textContent.trim();
+                // Find all scorecard components
+                var scorecards = document.querySelectorAll('.scorecard-component');
+                debug.scorecards = scorecards.length;
 
-                    if (el.children.length === 0 && text && text.length < 50) {
-                        // Labels are higher up
-                        if (rect.y >= 180 && rect.y < 250) {
-                            let labelMatch = ['Impressions', 'CTR', 'Clicks', 'Conversions', 'Conversion',
-                                            'Online Revenue', 'Spend', 'AOV', 'CPO', 'ROAS'];
-                            for (let label of labelMatch) {
-                                if (text === label || text.includes(label)) {
-                                    labels.push({
-                                        text: label,
-                                        x: Math.round(rect.x),
-                                        y: Math.round(rect.y)
-                                    });
-                                }
+                if (scorecards.length > 0) {
+                    debug.method = 'scorecard-dom';
+                    for (var i = 0; i < scorecards.length; i++) {
+                        var card = scorecards[i];
+                        var rect = card.getBoundingClientRect();
+                        if (rect.width === 0 || rect.height === 0) continue;
+                        var valueEl = card.querySelector('.value-label');
+                        var labelEl = card.querySelector('.kpi-label');
+                        if (valueEl && labelEl) {
+                            var labelText = labelEl.textContent.trim().replace('*', '');
+                            var valueText = valueEl.textContent.trim();
+                            if (labelText && valueText) {
+                                results[labelText] = valueText;
+                                debug.matched.push(labelText + '=' + valueText);
                             }
-                        }
-
-                        // Values are lower (Y ~ 250-280) and contain numbers
-                        if (rect.y >= 245 && rect.y < 285 && text.match(/[0-9]/)) {
-                            values.push({
-                                text: text,
-                                x: Math.round(rect.x),
-                                y: Math.round(rect.y)
-                            });
-                        }
-                    }
-                });
-
-                // Sort by X position (left to right)
-                labels.sort((a, b) => a.x - b.x);
-                values.sort((a, b) => a.x - b.x);
-
-                // Match labels to values by X position
-                let results = {};
-                for (let i = 0; i < labels.length; i++) {
-                    let label = labels[i];
-                    // Find value with similar X position
-                    for (let value of values) {
-                        if (Math.abs(value.x - label.x) < 100) {
-                            results[label.text] = value.text;
-                            break;
                         }
                     }
                 }
 
-                return results;
+                // Fallback: find labels by text and get value from parent siblings
+                if (Object.keys(results).length === 0) {
+                    debug.method = 'parent-sibling';
+                    var labelNames = ['Impressions', 'CTR', 'Clicks', 'Conversions', 'Conversion',
+                                      'Online Revenue', 'Spend', 'AOV', 'CPO', 'ROAS'];
+                    var allElements = document.querySelectorAll('*');
+                    var topLabels = {};
+
+                    for (var j = 0; j < allElements.length; j++) {
+                        var el = allElements[j];
+                        var r = el.getBoundingClientRect();
+                        if (r.width === 0 || r.height === 0) continue;
+                        var text = el.textContent.trim();
+                        if (!text || text.length > 50) continue;
+                        var isLeaf = true;
+                        for (var k = 0; k < el.children.length; k++) {
+                            if (el.children[k].textContent.trim().length > 0) { isLeaf = false; break; }
+                        }
+                        if (!isLeaf) continue;
+                        for (var m = 0; m < labelNames.length; m++) {
+                            if (text === labelNames[m] || text === labelNames[m] + '*') {
+                                if (!(labelNames[m] in topLabels) || r.y < topLabels[labelNames[m]].y) {
+                                    topLabels[labelNames[m]] = el;
+                                }
+                            }
+                        }
+                    }
+
+                    for (var name in topLabels) {
+                        var labelNode = topLabels[name];
+                        var parent = labelNode.parentElement;
+                        if (!parent) continue;
+                        var siblings = parent.querySelectorAll('*');
+                        for (var n = 0; n < siblings.length; n++) {
+                            var sib = siblings[n];
+                            var sr = sib.getBoundingClientRect();
+                            if (sr.width === 0 || sr.height === 0) continue;
+                            var st = sib.textContent.trim();
+                            if (!st || st === name || st === name + '*') continue;
+                            var sleaf = true;
+                            for (var p = 0; p < sib.children.length; p++) {
+                                if (sib.children[p].textContent.trim().length > 0) { sleaf = false; break; }
+                            }
+                            if (!sleaf) continue;
+                            if (/[0-9]/.test(st)) {
+                                results[name] = st;
+                                debug.matched.push(name + '=' + st);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                debug.labels = Object.keys(results).length;
+                debug.results = results;
+                return debug;
             """
 
-            found_metrics = self.driver.execute_script(script)
+            debug_result = self.driver.execute_script(script)
+
+            # Log debug info
+            method = debug_result.get('method', 'unknown')
+            scorecards = debug_result.get('scorecards', 0)
+            matched = debug_result.get('matched', [])
+            found_metrics = debug_result.get('results', {})
+
+            print(f"  [DEBUG] Method: {method}, Scorecards: {scorecards}, Matched: {len(matched)}")
+            if matched:
+                print(f"  [DEBUG] Matches: {', '.join(matched)}")
+            else:
+                print(f"  [DEBUG] WARNING: No metrics extracted - page may not have loaded")
+                try:
+                    self.driver.save_screenshot("debug_no_metrics.png")
+                    print(f"  [DEBUG] Screenshot saved: debug_no_metrics.png")
+                except:
+                    pass
 
             # Parse the found values
             label_map = {
@@ -424,7 +476,7 @@ class LookerDataExtractor:
                     metrics[target_metric] = parsed_value
 
         except Exception as e:
-            pass
+            print(f"  [ERROR] Metric extraction failed: {e}")
 
         return metrics
 

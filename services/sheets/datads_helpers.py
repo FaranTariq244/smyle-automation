@@ -824,14 +824,20 @@ def write_datads_data_to_sheets(date_obj: datetime, datads_data: List[Dict]):
 # WEEKLY REPORT - DATE RANGE HELPERS
 # =============================================================================
 
-def format_date_range_label(start_date: datetime, end_date: datetime) -> str:
-    """Format a date range label like '31 Mar - 6 Apr 2026'."""
+def format_date_range_label(start_date: datetime, end_date: datetime, include_week: bool = False) -> str:
+    """Format a date range label like '31 Mar - 6 Apr 2026' or '31 Mar - 6 Apr 2026 | Week 15'."""
     if start_date.month == end_date.month and start_date.year == end_date.year:
-        return f"{start_date.day} - {end_date.day} {end_date.strftime('%b')} {end_date.year}"
+        label = f"{start_date.day} - {end_date.day} {end_date.strftime('%b')} {end_date.year}"
     elif start_date.year == end_date.year:
-        return f"{start_date.day} {start_date.strftime('%b')} - {end_date.day} {end_date.strftime('%b')} {end_date.year}"
+        label = f"{start_date.day} {start_date.strftime('%b')} - {end_date.day} {end_date.strftime('%b')} {end_date.year}"
     else:
-        return f"{start_date.day} {start_date.strftime('%b')} {start_date.year} - {end_date.day} {end_date.strftime('%b')} {end_date.year}"
+        label = f"{start_date.day} {start_date.strftime('%b')} {start_date.year} - {end_date.day} {end_date.strftime('%b')} {end_date.year}"
+
+    if include_week:
+        week_num = start_date.isocalendar()[1]
+        label = f"{label}  |  Week {week_num}"
+
+    return label
 
 
 def find_date_range_row(worksheet, start_date: datetime, end_date: datetime,
@@ -858,9 +864,13 @@ def find_date_range_row(worksheet, start_date: datetime, end_date: datetime,
 def _parse_date_range_from_cell(cell_str: str) -> Optional[Tuple[datetime, datetime]]:
     """
     Parse a date range string like '31 Mar - 6 Apr 2026' or '1 - 7 Apr 2026'.
+    Also handles labels with week suffix: '6 - 12 Apr 2026  |  Week 15'.
     Returns (start_date, end_date) or None.
     """
     cell_str = cell_str.strip()
+    # Strip week number suffix if present (e.g. "  |  Week 15")
+    if '|' in cell_str:
+        cell_str = cell_str.split('|')[0].strip()
     if ' - ' not in cell_str:
         return None
 
@@ -1067,6 +1077,104 @@ def _categorize_landing_page(url: str) -> str:
 _CATEGORY_ORDER = ['NL', 'DE', 'REO', 'UK', 'Other']
 
 
+def _format_summary_section(worksheet, insert_row: int, section_rows: list,
+                            num_cols: int):
+    """
+    Apply visual formatting to a summary section after data is written.
+
+    First clears inherited formatting on ALL section rows (insert_row copies
+    adjacent row styles), then applies:
+        - Date range row: bold white text on dark blue (#1F4E79) background
+        - Header row: bold text on medium blue (#D6E4F0) background
+        - Category label rows: bold text on light green (#E2EFDA) background
+        - Data / separator rows: white background, normal text
+    """
+    requests = []
+    sheet_id = worksheet.id
+
+    def _color(hex_str):
+        """Convert hex color to Sheets API RGB dict (0-1 floats)."""
+        h = hex_str.lstrip('#')
+        return {
+            "red": int(h[0:2], 16) / 255,
+            "green": int(h[2:4], 16) / 255,
+            "blue": int(h[4:6], 16) / 255,
+        }
+
+    def _row_format_request(row_idx_0based, bg_color, bold=True,
+                            text_color="000000", font_size=10):
+        """Build a repeatCell request for a single row."""
+        return {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": row_idx_0based,
+                    "endRowIndex": row_idx_0based + 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": num_cols,
+                },
+                "cell": {"userEnteredFormat": {
+                    "backgroundColor": _color(bg_color),
+                    "textFormat": {
+                        "bold": bold,
+                        "foregroundColor": _color(text_color),
+                        "fontSize": font_size,
+                    },
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat)",
+            }
+        }
+
+    # Step 1: Reset ALL section rows to plain white / normal text
+    # This removes inherited formatting from insert_row operations
+    total_rows = len(section_rows)
+    start_0 = insert_row - 1  # 0-based
+    requests.append({
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": start_0,
+                "endRowIndex": start_0 + total_rows,
+                "startColumnIndex": 0,
+                "endColumnIndex": num_cols,
+            },
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": _color("FFFFFF"),
+                "textFormat": {
+                    "bold": False,
+                    "foregroundColor": _color("000000"),
+                    "fontSize": 10,
+                },
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat)",
+        }
+    })
+
+    # Step 2: Apply specific formatting to special rows
+    for i, row in enumerate(section_rows):
+        row_0 = start_0 + i
+
+        if i == 0:
+            # Date range label row — dark blue with white bold text
+            requests.append(_row_format_request(row_0, "1F4E79",
+                                                text_color="FFFFFF", font_size=11))
+        elif i == 1:
+            # Header row — medium blue with bold text
+            requests.append(_row_format_request(row_0, "D6E4F0",
+                                                text_color="000000", font_size=10))
+        elif len(row) == 1 and row[0] in _CATEGORY_ORDER:
+            # Category label row — light green with bold text
+            requests.append(_row_format_request(row_0, "E2EFDA",
+                                                text_color="1F4E79", font_size=10))
+
+    try:
+        worksheet.spreadsheet.batch_update({"requests": requests})
+        # -1 for the bulk reset request
+        print(f"    Applied formatting ({len(requests) - 1} styled rows, all rows reset)")
+    except Exception as e:
+        print(f"    Warning: Could not apply formatting: {e}")
+
+
 def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
                           datads_data: List[Dict], mode: str = 'weekly'):
     """
@@ -1086,14 +1194,18 @@ def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
         ... (REO, UK, Other)
         Row: (empty separator)
     """
-    date_range_label = format_date_range_label(start_date, end_date)
+    date_range_label = format_date_range_label(start_date, end_date, include_week=True)
+    # Also build the plain label (without week) for backward-compatible section detection
+    date_range_label_plain = format_date_range_label(start_date, end_date, include_week=False)
     mappings = get_column_mapping_objects(mode)
     headers = ["Landing page"] + [m.sheet_column for m in mappings]
 
     print(f"\n  [SUMMARY] Writing section for '{date_range_label}'")
 
-    # Check if section already exists
+    # Check if section already exists (try both with and without week number)
     existing = _find_summary_section(worksheet, date_range_label)
+    if not existing:
+        existing = _find_summary_section(worksheet, date_range_label_plain)
     if existing:
         print(f"    Removing existing section (rows {existing[0]}-{existing[1]})")
         _delete_rows_range(worksheet, existing[0], existing[1])
@@ -1155,6 +1267,9 @@ def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
         # No older sections found; append after all content
         insert_row = len(col_a) + 1 if col_a else 1
 
+    # Calculate num_cols for formatting
+    num_cols = max(len(row) for row in section_rows)
+
     # If inserting at top (row 1) or before existing content
     if insert_row <= len(col_a):
         # Insert rows by shifting content down
@@ -1163,15 +1278,19 @@ def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
         print(f"    Inserted {len(section_rows)} rows at position {insert_row}")
     else:
         # Append at end using a single batch update (avoids rate limits)
-        max_cols = max(len(row) for row in section_rows)
         # Pad all rows to the same width
-        padded = [row + [''] * (max_cols - len(row)) for row in section_rows]
+        padded = [row + [''] * (num_cols - len(row)) for row in section_rows]
         end_row = insert_row + len(padded) - 1
         start_cell = gspread.utils.rowcol_to_a1(insert_row, 1)
-        end_cell = gspread.utils.rowcol_to_a1(end_row, max_cols)
+        end_cell = gspread.utils.rowcol_to_a1(end_row, num_cols)
         cell_range = f"{start_cell}:{end_cell}"
         worksheet.update(cell_range, padded, value_input_option='USER_ENTERED')
         print(f"    Batch-wrote {len(padded)} rows at {cell_range}")
+
+    # Apply visual formatting (colors, bold) to the section
+    import time as _time
+    _time.sleep(1)  # Brief pause to avoid rate limits
+    _format_summary_section(worksheet, insert_row, section_rows, num_cols)
 
 
 # =============================================================================

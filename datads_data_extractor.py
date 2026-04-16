@@ -299,6 +299,8 @@ class DataAdsDataExtractor:
         target_year = target_date.year
         target_header = f"{target_month_name} {target_year}"
 
+        print(f"[DATE] Looking for month '{target_header}' to click day {target_date.day}")
+
         # Check if target month is already visible in the calendar
         max_nav_clicks = 24  # Safety limit
         for i in range(max_nav_clicks):
@@ -336,42 +338,37 @@ class DataAdsDataExtractor:
                 continue
 
             first_visible = current_headers[0]
-            if self._month_before(target_year, target_date.month, first_visible):
-                self._click_calendar_nav("prev")
-            else:
-                self._click_calendar_nav("next")
-            time.sleep(0.5)
+            direction = "prev" if self._month_before(target_year, target_date.month, first_visible) else "next"
+            print(f"[DATE] Visible months: {current_headers}, need '{target_header}' — clicking {direction}")
+            nav_success = self._click_calendar_nav(direction)
+            if not nav_success:
+                print(f"[DATE] Navigation button click may have failed, retrying...")
+                time.sleep(0.5)
+                nav_success = self._click_calendar_nav(direction)
+            time.sleep(1)
 
         raise Exception(f"Could not navigate calendar to {target_header}")
 
     def _get_visible_month_headers(self):
         """Get visible month/year headers from the calendar. Returns list of (year, month) tuples."""
         results = []
-        # Look for elements whose text matches "MonthName YYYY" pattern
-        try:
-            # Find all elements and check for month+year pattern
-            for m_idx, m_name in enumerate(self.MONTH_FULL[1:], 1):
-                # Use normalize-space and exact text match for "Month YYYY"
-                for year in range(2025, 2028):
-                    target_text = f"{m_name} {year}"
-                    headers = self.driver.find_elements(
-                        By.XPATH,
-                        f"//*[normalize-space(text())='{target_text}']"
-                    )
-                    for h in headers:
-                        if h.is_displayed():
-                            results.append((year, m_idx))
-        except Exception:
-            pass
 
-        if not results:
-            # Fallback: look for any element containing a month name + year
+        # Strategy 1: Find calendar caption/header elements by common CSS classes
+        # This is much faster than brute-forcing all month/year combinations
+        caption_selectors = [
+            # datads.io uses h2 with Tailwind classes for month headers
+            "h2.text-sm.font-semibold",
+            "[class*='caption'] [class*='label']",
+            "[class*='rdp-caption']",
+            "[class*='month_caption']",
+            "[class*='calendar-title']",
+            "[class*='month-title']",
+            "h2[class*='month']",
+        ]
+        for sel in caption_selectors:
             try:
-                all_elements = self.driver.find_elements(
-                    By.XPATH,
-                    "//*[contains(@class, 'caption') or contains(@class, 'header') or contains(@class, 'month') or contains(@class, 'title')]"
-                )
-                for el in all_elements:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in elements:
                     if el.is_displayed():
                         text = el.text.strip()
                         match = re.match(r'^(\w+)\s+(\d{4})$', text)
@@ -380,11 +377,54 @@ class DataAdsDataExtractor:
                             year = int(match.group(2))
                             if month_name in self.MONTH_FULL[1:]:
                                 m_idx = self.MONTH_FULL.index(month_name)
-                                results.append((year, m_idx))
+                                if (year, m_idx) not in results:
+                                    results.append((year, m_idx))
             except Exception:
-                pass
+                continue
 
-        return results
+        if results:
+            return sorted(results)
+
+        # Strategy 2: Look for any element with class containing caption/header/month/title
+        try:
+            all_elements = self.driver.find_elements(
+                By.XPATH,
+                "//*[contains(@class, 'caption') or contains(@class, 'header') or contains(@class, 'month') or contains(@class, 'title')]"
+            )
+            for el in all_elements:
+                if el.is_displayed():
+                    text = el.text.strip()
+                    match = re.match(r'^(\w+)\s+(\d{4})$', text)
+                    if match:
+                        month_name = match.group(1)
+                        year = int(match.group(2))
+                        if month_name in self.MONTH_FULL[1:]:
+                            m_idx = self.MONTH_FULL.index(month_name)
+                            if (year, m_idx) not in results:
+                                results.append((year, m_idx))
+        except Exception:
+            pass
+
+        if results:
+            return sorted(results)
+
+        # Strategy 3 (fallback): Brute-force search for each month/year text
+        try:
+            for m_idx, m_name in enumerate(self.MONTH_FULL[1:], 1):
+                for year in range(2025, 2028):
+                    target_text = f"{m_name} {year}"
+                    headers = self.driver.find_elements(
+                        By.XPATH,
+                        f"//*[normalize-space(text())='{target_text}']"
+                    )
+                    for h in headers:
+                        if h.is_displayed():
+                            if (year, m_idx) not in results:
+                                results.append((year, m_idx))
+        except Exception:
+            pass
+
+        return sorted(results)
 
     def _month_before(self, target_year, target_month, visible_ym):
         """Check if target (year,month) is before visible (year,month)."""
@@ -392,46 +432,82 @@ class DataAdsDataExtractor:
         return (target_year, target_month) < (vis_year, vis_month)
 
     def _click_calendar_nav(self, direction):
-        """Click the previous or next month navigation arrow."""
-        if direction == "prev":
-            # Left arrow — typically < or an SVG arrow on the left
-            try:
-                arrows = self.driver.find_elements(By.CSS_SELECTOR, "button[aria-label='Go to previous month'], button.rdp-button_previous")
-                if not arrows:
-                    # Fallback: find < buttons near the calendar header
-                    arrows = self.driver.find_elements(By.XPATH, "//button[contains(@class, 'prev') or @aria-label='Previous']")
-                if not arrows:
-                    # Look for chevron/arrow pointing left
-                    arrows = self.driver.find_elements(By.CSS_SELECTOR, "[class*='chevron-left'], [class*='ChevronLeft'], [class*='arrow-left']")
-                if not arrows:
-                    # Generic: first navigation button (usually prev)
-                    nav_btns = self.driver.find_elements(By.CSS_SELECTOR, "button svg")
-                    if nav_btns:
-                        arrows = [nav_btns[0].find_element(By.XPATH, "..")]
-                for a in arrows:
-                    if a.is_displayed():
-                        a.click()
-                        return
-            except Exception:
-                pass
+        """Click the previous or next month navigation arrow. Returns True if clicked."""
+        is_prev = direction == "prev"
+        sr_text = "Previous month" if is_prev else "Next month"
+
+        # Strategy 1 (datads.io specific): button containing <span class="sr-only">Previous/Next month</span>
+        # The actual datads calendar uses Tailwind with sr-only spans for accessibility
+        try:
+            buttons = self.driver.find_elements(
+                By.XPATH,
+                f"//button[.//span[contains(@class, 'sr-only') and normalize-space(text())='{sr_text}']]"
+            )
+            for btn in buttons:
+                if btn.is_displayed():
+                    try:
+                        btn.click()
+                    except Exception:
+                        ActionChains(self.driver).move_to_element(btn).click().perform()
+                    print(f"[DATE] Clicked {direction} nav (sr-only '{sr_text}' button)")
+                    return True
+        except Exception:
+            pass
+
+        # Strategy 2: buttons with left/right absolute positioning (calendar arrow pattern)
+        if is_prev:
+            css_sel = "button[class*='-left-']"
         else:
-            # Right arrow — typically > or an SVG arrow on the right
+            css_sel = "button[class*='-right-']"
+        try:
+            arrows = self.driver.find_elements(By.CSS_SELECTOR, css_sel)
+            for a in arrows:
+                if a.is_displayed() and 'absolute' in (a.get_attribute("class") or ""):
+                    try:
+                        a.click()
+                    except Exception:
+                        ActionChains(self.driver).move_to_element(a).click().perform()
+                    print(f"[DATE] Clicked {direction} nav (absolute positioned button)")
+                    return True
+        except Exception:
+            pass
+
+        # Strategy 3: Standard aria-label and rdp patterns
+        if is_prev:
+            selectors = [
+                ("css", "button[aria-label='Go to previous month']"),
+                ("css", "button[aria-label='Go to the previous month']"),
+                ("css", "button.rdp-button_previous, button[class*='nav_button_previous']"),
+                ("xpath", "//button[contains(@class, 'prev')]"),
+                ("xpath", "//button[@aria-label='Previous']"),
+                ("css", "[class*='chevron-left'], [class*='ChevronLeft'], [class*='arrow-left']"),
+            ]
+        else:
+            selectors = [
+                ("css", "button[aria-label='Go to next month']"),
+                ("css", "button[aria-label='Go to the next month']"),
+                ("css", "button.rdp-button_next, button[class*='nav_button_next']"),
+                ("xpath", "//button[contains(@class, 'next')]"),
+                ("xpath", "//button[@aria-label='Next']"),
+                ("css", "[class*='chevron-right'], [class*='ChevronRight'], [class*='arrow-right']"),
+            ]
+
+        for method, selector in selectors:
             try:
-                arrows = self.driver.find_elements(By.CSS_SELECTOR, "button[aria-label='Go to next month'], button.rdp-button_next")
-                if not arrows:
-                    arrows = self.driver.find_elements(By.XPATH, "//button[contains(@class, 'next') or @aria-label='Next']")
-                if not arrows:
-                    arrows = self.driver.find_elements(By.CSS_SELECTOR, "[class*='chevron-right'], [class*='ChevronRight'], [class*='arrow-right']")
-                if not arrows:
-                    nav_btns = self.driver.find_elements(By.CSS_SELECTOR, "button svg")
-                    if len(nav_btns) >= 2:
-                        arrows = [nav_btns[-1].find_element(By.XPATH, "..")]
+                if method == "css":
+                    arrows = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                else:
+                    arrows = self.driver.find_elements(By.XPATH, selector)
                 for a in arrows:
                     if a.is_displayed():
                         a.click()
-                        return
+                        print(f"[DATE] Clicked {direction} nav (selector: {selector})")
+                        return True
             except Exception:
-                pass
+                continue
+
+        print(f"[DATE] WARNING: Could not find {direction} navigation button!")
+        return False
 
     def _click_day_in_month(self, target_date, month_header_el):
         """Click the day number within the correct month panel of the calendar."""

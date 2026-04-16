@@ -1040,6 +1040,33 @@ def _delete_rows_range(worksheet, start_row: int, end_row: int):
     worksheet.delete_rows(start_row, end_row)
 
 
+def _categorize_landing_page(url: str) -> str:
+    """
+    Categorize a landing page URL into a region group.
+
+    Rules:
+        - URL contains 'currency=GBP' -> UK
+        - Domain is wesmyle.de -> DE
+        - URL contains '/nl/' -> NL
+        - Domain is wesmyle.com without '/nl/' -> REO
+        - Anything else -> Other
+    """
+    url_lower = url.lower()
+    if 'currency=gbp' in url_lower:
+        return 'UK'
+    if 'wesmyle.de' in url_lower:
+        return 'DE'
+    if '/nl/' in url_lower:
+        return 'NL'
+    if 'wesmyle.com' in url_lower:
+        return 'REO'
+    return 'Other'
+
+
+# Category display order for the summary sheet
+_CATEGORY_ORDER = ['NL', 'DE', 'REO', 'UK', 'Other']
+
+
 def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
                           datads_data: List[Dict], mode: str = 'weekly'):
     """
@@ -1049,8 +1076,14 @@ def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
     Section structure:
         Row: Date range label (e.g. "31 Mar - 6 Apr 2026")
         Row: Headers (Landing page, metric1, metric2, ...)
-        Row: LP1 URL + metrics
-        Row: LP2 URL + metrics
+        Row: "NL" category label
+        Row: NL LP1 URL + metrics
+        Row: NL LP2 URL + metrics
+        Row: (empty separator)
+        Row: "DE" category label
+        Row: DE LP1 URL + metrics
+        Row: (empty separator)
+        ... (REO, UK, Other)
         Row: (empty separator)
     """
     date_range_label = format_date_range_label(start_date, end_date)
@@ -1065,22 +1098,40 @@ def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
         print(f"    Removing existing section (rows {existing[0]}-{existing[1]})")
         _delete_rows_range(worksheet, existing[0], existing[1])
 
+    # Categorize landing pages into groups
+    categories: Dict[str, List[Dict]] = {cat: [] for cat in _CATEGORY_ORDER}
+    for datads_row in datads_data:
+        lp = datads_row.get('Landing page', '')
+        if not lp or lp == 'Unknown':
+            continue
+        cat = _categorize_landing_page(lp)
+        categories[cat].append(datads_row)
+
     # Build section rows
     section_rows = []
     section_rows.append([date_range_label])  # Date range label
     section_rows.append(headers)  # Headers
 
-    for datads_row in datads_data:
-        lp = datads_row.get('Landing page', '')
-        if not lp or lp == 'Unknown':
+    for cat in _CATEGORY_ORDER:
+        rows = categories[cat]
+        if not rows:
             continue
-        row_values = [lp]
-        for mapping in mappings:
-            raw_val = datads_row.get(mapping.datads_field, '')
-            row_values.append(parse_value(raw_val) if raw_val else '')
-        section_rows.append(row_values)
+        # Category label row
+        section_rows.append([cat])
+        print(f"    Category '{cat}': {len(rows)} landing pages")
+        for datads_row in rows:
+            lp = datads_row.get('Landing page', '')
+            row_values = [lp]
+            for mapping in mappings:
+                raw_val = datads_row.get(mapping.datads_field, '')
+                row_values.append(parse_value(raw_val) if raw_val else '')
+            section_rows.append(row_values)
+        # Empty separator row after each category
+        section_rows.append([''])
 
-    section_rows.append([''])  # Empty separator row
+    # If no data was added (all rows were Unknown), add an empty separator
+    if len(section_rows) == 2:
+        section_rows.append([''])
 
     # Determine insert position - newest on top
     col_a = worksheet.col_values(1)

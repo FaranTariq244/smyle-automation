@@ -62,6 +62,7 @@ SETTINGS_KEYS = [
     "ORDER_TYPE_SHEET_URL",
     "DAILY_ADD_TRACKER_SHEET_URL",
     "DATADS_SHEET_URL",
+    "SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL",
 ]
 
 
@@ -105,7 +106,7 @@ def build_subprocess_code(task: str, date_str: str, end_date_str: str = "") -> s
     return f"""
 import sys
 from datetime import datetime
-from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report, run_datads_report, run_datads_weekly_report
+from run_all_reports import run_daily_report, run_order_type_report, run_add_tracker_report, run_datads_report, run_datads_weekly_report, run_smyle_online_strategy_rn_fc1_weekly_report
 date_str = "{date_str}"
 date_obj = datetime.strptime(date_str, "%d-%b-%Y")
 end_date_str = "{end_date_str}"
@@ -126,6 +127,8 @@ try:
         results.append(run_datads_report(date_obj, date_str))
     if "datads_weekly" in tasks and end_date_obj:
         results.append(run_datads_weekly_report(date_obj, end_date_obj, date_str, end_date_str))
+    if "weekly" in tasks and end_date_obj:
+        results.append(run_smyle_online_strategy_rn_fc1_weekly_report(date_obj, end_date_obj, date_str, end_date_str))
     ok = all(results) if results else False
     sys.exit(0 if ok else 1)
 except Exception as exc:
@@ -268,11 +271,11 @@ def on_schedule_due(schedule: dict) -> bool:
     state.current_schedule_id = schedule_id
     state.current_run_origin = "scheduled"
 
-    # Check if datads_weekly is in the task list - calculate weekly date range
+    # Check if datads_weekly or weekly is in the task list - calculate weekly date range
     task = schedule.get("task", "all")
     end_date_str = ""
-    if "datads_weekly" in task:
-        # For weekly DataAds: end date = days_ago, start date = days_ago + 6
+    if "datads_weekly" in task or "weekly" in task.split(","):
+        # For weekly tasks: end date = days_ago, start date = days_ago + 6
         # This gives a 7-day range ending on the target date
         weekly_start = target_date - timedelta(days=6)
         end_date_str = date_str  # end = target date
@@ -297,6 +300,7 @@ def _task_display_name(task: str) -> str:
         "addtracker": "Daily Add Tracker",
         "datads": "DataAds Daily",
         "datads_weekly": "DataAds Weekly",
+        "weekly": "SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)",
     }
     if task in labels:
         return labels[task]
@@ -643,7 +647,8 @@ def run_task():
         blocked = [t for t in task_parts if t in disabled]
         if blocked:
             labels = {'daily': 'Daily Report', 'order': 'Order Type', 'addtracker': 'Add Tracker',
-                      'datads': 'DataAds Daily', 'datads_weekly': 'DataAds Weekly'}
+                      'datads': 'DataAds Daily', 'datads_weekly': 'DataAds Weekly',
+                      'weekly': 'SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)'}
             names = ', '.join(labels.get(b, b) for b in blocked)
             return jsonify({'success': False, 'error': f'Disabled report(s): {names}'}), 400
         # Filter out disabled from "all"
@@ -661,15 +666,16 @@ def run_task():
     state.current_schedule_id = None
     state.current_run_origin = "manual"
 
-    # Handle weekly datads with end date
-    if task == 'datads_weekly' and end_date_str:
+    # Handle date-range tasks (datads_weekly, weekly) with an end date.
+    if task in ('datads_weekly', 'weekly') and end_date_str:
         parsed_end = parse_date(end_date_str)
         if not parsed_end:
             return jsonify({'success': False, 'error': 'Invalid end date format.'}), 400
         _, formatted_end_date = parsed_end
         start_task_with_date(task, date_obj, formatted_date, origin="manual",
                              end_date_str=formatted_end_date, headless=headless)
-        return jsonify({'success': True, 'message': f'Started weekly DataAds for {formatted_date} to {formatted_end_date}'})
+        label = 'SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)' if task == 'weekly' else 'Weekly DataAds'
+        return jsonify({'success': True, 'message': f'Started {label} for {formatted_date} to {formatted_end_date}'})
 
     start_task_with_date(task, date_obj, formatted_date, origin="manual", headless=headless)
 

@@ -30,6 +30,16 @@ def run_datads_weekly_report(start_date_obj, end_date_obj, start_date_str, end_d
     return _run_weekly(start_date_obj, end_date_obj, start_date_str, end_date_str)
 
 
+def run_smyle_online_strategy_rn_fc1_weekly_report(
+    start_date_obj, end_date_obj, start_date_str, end_date_str
+):
+    """Run the SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly) report (Phase 1: sheet prep only)."""
+    from smyle_online_strategy_rn_fc1_weekly_report import (
+        run_smyle_online_strategy_rn_fc1_weekly_report as _run,
+    )
+    return _run(start_date_obj, end_date_obj, start_date_str, end_date_str)
+
+
 def get_date_input():
     """Get date from user or use previous day."""
     print("\n" + "="*80)

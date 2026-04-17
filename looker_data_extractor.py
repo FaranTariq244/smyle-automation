@@ -316,6 +316,357 @@ class LookerDataExtractor:
         except Exception as e:
             print(f"  [ERROR] Medium filter selection failed: {e}")
 
+    def select_country(self, country_names, exclude=False):
+        """
+        Apply a Country filter such that ONLY the given countries are selected.
+
+        Accepts a single country name (str) or a list of names. The dropdown
+        is virtualized (md-virtual-repeat-container), and the master
+        'Country' checkbox can unpredictably flip the filter into Exclude
+        mode, so we avoid it entirely. Strategy:
+
+          1. Scroll through the full list, collecting every country row and
+             its current aria-checked state — this handles virtualized
+             items that aren't in the DOM until scrolled to.
+          2. For every country that is checked but not wanted, and every
+             wanted country that isn't checked, use the 'Type to search'
+             input to isolate that one row and native-click its checkbox.
+          3. Clear the search, verify the final set of checked items, and
+             close the dropdown with ESC.
+
+        If `exclude=True`, `country_names` is interpreted as the list of
+        countries to EXCLUDE — every other enumerated country will be
+        checked, those in the list will be unchecked.
+        """
+        if isinstance(country_names, str):
+            targets = [country_names]
+        else:
+            targets = list(country_names)
+        target_list = [n.strip() for n in targets]
+
+        try:
+            # Find the Country filter button in the top bar.
+            country_elements = self.driver.find_elements(
+                By.XPATH, "//*[contains(text(), 'Country')]"
+            )
+            country_button = None
+            for elem in country_elements:
+                try:
+                    if elem.is_displayed() and elem.location['y'] < 300:
+                        country_button = elem
+                        break
+                except Exception:
+                    continue
+
+            if not country_button:
+                print("  [ERROR] Country filter button not found in top bar.")
+                return
+
+            # Make sure no stray filter dropdown is open before we click.
+            self._close_any_dropdown()
+            time.sleep(0.5)
+
+            country_button.click()
+            time.sleep(3)
+
+            # Wait longer if the dropdown is slow to render - but never re-click
+            # the button, since a second click would close an already-open popup.
+            for _ in range(3):
+                cb_count = self.driver.execute_script(
+                    "return document.querySelectorAll('[role=\"checkbox\"]').length;"
+                ) or 0
+                if cb_count >= 2:
+                    break
+                time.sleep(1.5)
+            if cb_count < 2:
+                print(f"  [WARN] Country dropdown did not open (checkbox count={cb_count}).")
+
+            # Snapshot-the-currently-rendered-rows JS.
+            snapshot_js = r"""
+            var rows = [];
+            var cbs = document.querySelectorAll("[role='checkbox']");
+            for (var i = 0; i < cbs.length; i++) {
+                var cb = cbs[i];
+                var parent = cb.closest("div.item") || cb.parentElement;
+                var text = parent ? (parent.textContent || '').trim() : '';
+                var firstLine = text.split('\n')[0].trim();
+                if (!firstLine) continue;
+                // Never touch the master 'Country' checkbox — it can flip
+                // the whole filter into Exclude mode.
+                if (firstLine.toLowerCase() === 'country') continue;
+                rows.push({
+                    text: firstLine,
+                    checked: cb.getAttribute('aria-checked') === 'true'
+                });
+            }
+            return rows;
+            """
+
+            # Scroll control for the virtualized list.
+            # Angular Material puts the actual scrollable element inside the
+            # md-virtual-repeat-container - it is the child with class
+            # 'md-virtual-repeat-scroller'. Setting scrollTop on the outer
+            # container does nothing in many cases. We try the scroller
+            # first, fall back to the container, then fall back to wheel
+            # events (which md-virtual-repeat also listens for).
+            scroll_js = r"""
+            var pos = arguments[0];
+            var scroller = document.querySelector('.md-virtual-repeat-scroller');
+            var container = document.querySelector('md-virtual-repeat-container, .md-virtual-repeat-container');
+            var target = scroller || container;
+            if (!target) return null;
+            var before = target.scrollTop;
+            target.scrollTop = pos;
+            if (target.scrollTop === before && pos !== before) {
+                // scrollTop didn't take - dispatch a wheel event as a fallback.
+                var delta = pos > before ? 400 : -400;
+                var evt = new WheelEvent('wheel', {
+                    bubbles: true, cancelable: true,
+                    deltaY: delta, deltaMode: 0
+                });
+                target.dispatchEvent(evt);
+            }
+            return {
+                scrollTop: target.scrollTop,
+                scrollHeight: target.scrollHeight,
+                clientHeight: target.clientHeight,
+                tag: scroller ? 'scroller' : 'container'
+            };
+            """
+
+            scroll_to_bottom_js = r"""
+            var scroller = document.querySelector('.md-virtual-repeat-scroller');
+            var container = document.querySelector('md-virtual-repeat-container, .md-virtual-repeat-container');
+            var target = scroller || container;
+            if (!target) return null;
+            target.scrollTop = target.scrollHeight;
+            // Wheel-event nudge in case scrollTop alone doesn't render virtualized rows.
+            var evt = new WheelEvent('wheel', {
+                bubbles: true, cancelable: true,
+                deltaY: 800, deltaMode: 0
+            });
+            target.dispatchEvent(evt);
+            return {
+                scrollTop: target.scrollTop,
+                scrollHeight: target.scrollHeight,
+                clientHeight: target.clientHeight
+            };
+            """
+
+            # Locate the dropdown's 'Type to search' input.
+            find_search_js = r"""
+            var inputs = document.querySelectorAll('input');
+            for (var i = 0; i < inputs.length; i++) {
+                var inp = inputs[i];
+                var r = inp.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var ph = (inp.getAttribute('placeholder') || '').toLowerCase();
+                var aria = (inp.getAttribute('aria-label') || '').toLowerCase();
+                if (ph.indexOf('search') !== -1 ||
+                    ph.indexOf('type') !== -1 ||
+                    aria.indexOf('search') !== -1) {
+                    return inp;
+                }
+            }
+            return null;
+            """
+            search_input = self.driver.execute_script(find_search_js)
+            if search_input is None:
+                print("  [WARN] Dropdown search input not found; targets may be missed.")
+
+            clear_search_js = (
+                "arguments[0].value = '';"
+                "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));"
+            )
+
+            # Step 1: clear any leftover search text so we enumerate the full list.
+            if search_input is not None:
+                try:
+                    self.driver.execute_script(clear_search_js, search_input)
+                except Exception:
+                    pass
+                time.sleep(0.6)
+
+            def _enumerate_rows() -> dict:
+                """Scroll through the full dropdown and snapshot every row.
+
+                Stops when `stable` consecutive scroll attempts produce no new
+                row keys. Uses scroll_js (which dispatches a wheel event if
+                scrollTop doesn't move) so virtualized rows below the fold
+                get rendered.
+                """
+                # Reset to top first.
+                self.driver.execute_script(scroll_js, 0)
+                time.sleep(0.35)
+
+                seen_local: dict = {}
+                stable_local = 0
+                max_stable = 3
+                scroll_pos_local = 0
+
+                for _ in range(80):
+                    batch_local = self.driver.execute_script(snapshot_js) or []
+                    before = len(seen_local)
+                    for r in batch_local:
+                        key = r["text"].strip().lower()
+                        if not key:
+                            continue
+                        seen_local[key] = r
+                    if len(seen_local) == before:
+                        stable_local += 1
+                    else:
+                        stable_local = 0
+                    if stable_local >= max_stable:
+                        break
+
+                    # Scroll down by a fixed step - wheel-event fallback in
+                    # scroll_js handles cases where scrollTop doesn't move.
+                    scroll_pos_local += 300
+                    info_local = self.driver.execute_script(scroll_js, scroll_pos_local)
+                    time.sleep(0.35)
+                    if info_local is None:
+                        # No virtual container present - list is fully rendered.
+                        break
+                return seen_local
+
+            seen = _enumerate_rows()
+
+            # Reset scroll to top so the search+click phase starts clean.
+            self.driver.execute_script(scroll_js, 0)
+            time.sleep(0.3)
+
+            all_rows = list(seen.values())
+            currently_checked = sorted(r["text"] for r in all_rows if r["checked"])
+            print(f"  [Country] Enumerated {len(all_rows)} rows; currently checked: {currently_checked}")
+
+            # If caller passed exclude=True, invert the include list — keep
+            # every enumerated country EXCEPT the ones in `target_list`.
+            if exclude:
+                exclude_lower = {n.strip().lower() for n in target_list}
+                target_list = [
+                    row["text"]
+                    for row in all_rows
+                    if row["text"].strip().lower() not in exclude_lower
+                ]
+                print(
+                    f"  [Country] Exclude mode: {len(target_list)} include targets "
+                    f"after removing {sorted(exclude_lower)}"
+                )
+
+            # Step 3: compute toggle list (case-insensitive match).
+            target_lower = {n.strip().lower() for n in target_list}
+
+            to_uncheck = [
+                row["text"] for row in all_rows
+                if row["checked"] and row["text"].strip().lower() not in target_lower
+            ]
+
+            to_check = []
+            for t in target_list:
+                row = seen.get(t.strip().lower())
+                if row is None:
+                    print(f"  [WARN] Target '{t}' not found in dropdown list.")
+                    continue
+                if not row["checked"]:
+                    to_check.append(t)
+
+            print(f"  [Country] To uncheck: {to_uncheck}")
+            print(f"  [Country] To check  : {to_check}")
+
+            find_by_name_js = r"""
+            var name = String(arguments[0]).toLowerCase();
+            var cbs = document.querySelectorAll("[role='checkbox']");
+            for (var i = 0; i < cbs.length; i++) {
+                var cb = cbs[i];
+                var parent = cb.closest("div.item") || cb.parentElement;
+                var text = parent ? (parent.textContent || '').trim() : '';
+                var firstLine = text.split('\n')[0].trim().toLowerCase();
+                if (firstLine === 'country') continue;
+                if (firstLine === name) return cb;
+            }
+            return null;
+            """
+
+            # IMPORTANT: check the target countries BEFORE unchecking the
+            # unwanted ones. If the include-list ever becomes empty (e.g.
+            # we uncheck the one remaining country first), Looker auto-
+            # flips the filter into Exclude mode, and subsequent clicks
+            # add to the exclude list instead of the include list.
+            for name in to_check + to_uncheck:
+                if search_input is not None:
+                    try:
+                        self.driver.execute_script(clear_search_js, search_input)
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+                    try:
+                        search_input.send_keys(name)
+                    except Exception:
+                        # Re-find the input if it went stale across toggles.
+                        search_input = self.driver.execute_script(find_search_js)
+                        if search_input is not None:
+                            search_input.send_keys(name)
+                    time.sleep(1.0)
+                target_el = self.driver.execute_script(find_by_name_js, name)
+                if target_el is None:
+                    print(f"  [WARN] Could not click '{name}' - not found after search.")
+                else:
+                    try:
+                        target_el.click()  # Selenium native click
+                    except Exception:
+                        try:
+                            self.driver.execute_script("arguments[0].click();", target_el)
+                        except Exception:
+                            print(f"  [WARN] Could not click '{name}' - click dispatch failed.")
+                time.sleep(0.8)
+
+            # Clear search back to empty so the full list is visible.
+            if search_input is not None:
+                try:
+                    self.driver.execute_script(clear_search_js, search_input)
+                except Exception:
+                    pass
+                time.sleep(0.6)
+
+            # Verify final state by scrolling through the whole list again.
+            final_seen = _enumerate_rows()
+            self.driver.execute_script(scroll_js, 0)
+            time.sleep(0.2)
+            final_checked = sorted(r["text"] for r in final_seen.values() if r["checked"])
+            print(f"  [Country] Final checked (full scroll): {final_checked}")
+
+            # Close dropdown robustly, verify it actually closed, then wait for reload.
+            self._close_any_dropdown()
+            time.sleep(8)
+
+        except Exception as e:
+            print(f"  [ERROR] Country filter selection failed: {e}")
+
+    def _close_any_dropdown(self):
+        """Close any open Looker filter dropdown by pressing ESC.
+
+        ESC is sent up to 4 times (with a brief wait between attempts) until
+        the dropdown is actually gone. We deliberately do NOT click anywhere
+        else on the page - a stray click inside the virtualized dropdown
+        would toggle whatever item is under the cursor.
+        """
+        def _open_count():
+            return self.driver.execute_script(
+                "return document.querySelectorAll('[role=\"checkbox\"]').length;"
+            ) or 0
+
+        for _ in range(4):
+            if _open_count() <= 1:
+                return
+            try:
+                ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            except Exception:
+                pass
+            time.sleep(1.0)
+
+        if _open_count() > 1:
+            print("  [WARN] Dropdown may still be open after repeated ESC attempts.")
+
     def extract_metrics(self):
         """
         Extract the main KPI metrics from the Looker Studio page.

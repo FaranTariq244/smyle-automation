@@ -409,12 +409,17 @@
         .action-btn .action-label {
             font-size: 13px;
             font-weight: 600;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            line-height: 1.25;
         }
 
         .action-btn .action-desc {
             font-size: 11px;
             color: var(--text-muted);
             font-weight: 400;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         /* ── Status ── */
@@ -1530,6 +1535,10 @@
                             <span class="action-label" id="datads-btn-label">DataAds (Daily)</span>
                             <span class="action-desc" id="datads-btn-desc">DataAds landing pages</span>
                         </button>
+                        <button class="action-btn" id="btn-run-weekly" onclick="runWeekly()">
+                            <span class="action-label">SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)</span>
+                            <span class="action-desc">WEEKLY tab - date range</span>
+                        </button>
                         <button class="action-btn" id="btn-run-scheduled" onclick="runScheduleNow()" title="Triggers the first available schedule">
                             <span class="action-label">Run Scheduled</span>
                             <span class="action-desc">Trigger first schedule</span>
@@ -1633,6 +1642,13 @@
                                     <div class="report-list-item-text">
                                         <span class="report-list-item-name">DataAds (Weekly)</span>
                                         <span class="report-list-item-desc">DataAds weekly date range report</span>
+                                    </div>
+                                </label>
+                                <label class="report-list-item">
+                                    <input type="checkbox" class="sched-report-chk" value="weekly" onchange="updateReportCount()">
+                                    <div class="report-list-item-text">
+                                        <span class="report-list-item-name">SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)</span>
+                                        <span class="report-list-item-desc">WEEKLY tab date-range report</span>
                                     </div>
                                 </label>
                             </div>
@@ -1915,6 +1931,11 @@
                             <input type="text" id="setting-datads" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
                         </div>
 
+                        <div class="form-group" style="margin-top: 16px;">
+                            <label class="form-label">SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL</label>
+                            <input type="text" id="setting-weekly" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=... (WEEKLY tab)">
+                        </div>
+
                         <div class="divider"></div>
 
                         <div class="btn-group">
@@ -1961,6 +1982,13 @@
                                 <div class="report-list-item-text">
                                     <span class="report-list-item-name">DataAds (Weekly)</span>
                                     <span class="report-list-item-desc">DataAds weekly date range report</span>
+                                </div>
+                            </label>
+                            <label class="report-list-item" style="padding:10px 14px;">
+                                <input type="checkbox" class="report-avail-chk" value="weekly" checked onchange="saveReportAvailability()">
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)</span>
+                                    <span class="report-list-item-desc">WEEKLY tab date-range report</span>
                                 </div>
                             </label>
                         </div>
@@ -2263,6 +2291,44 @@
             }
         }
 
+        async function runWeekly() {
+            if (isRunning) {
+                showToast('A task is already running', 'error');
+                return;
+            }
+            // Ensure the End Date field is visible for the date-range picker.
+            const endGroup = document.getElementById('date-end-group');
+            if (endGroup && endGroup.style.display === 'none') {
+                endGroup.style.display = '';
+                document.getElementById('date-label-start').textContent = 'Start Date';
+                showToast('Pick start and end dates for the week, then click Weekly Report again.', 'info');
+                return;
+            }
+            const dateInput = nativeToDate(document.getElementById('date-input').value);
+            const endDateInput = nativeToDate(document.getElementById('date-input-end').value);
+            if (!dateInput || !endDateInput) {
+                showToast('Weekly Report needs both a start and an end date.', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        task: 'weekly',
+                        date: dateInput,
+                        end_date: endDateInput,
+                        headless: browserMode === 'headless'
+                    })
+                });
+                const data = await response.json();
+                if (data.success) showToast(data.message, 'success');
+                else showToast(data.error, 'error');
+            } catch (error) {
+                showToast('Failed to start weekly report', 'error');
+            }
+        }
+
         async function stopTask() {
             try {
                 const response = await fetch('/api/stop', { method: 'POST' });
@@ -2375,7 +2441,7 @@
         }
 
         function formatTaskDisplay(taskStr) {
-            const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', datads: 'DataAds Daily', datads_weekly: 'DataAds Weekly', all: 'All Reports' };
+            const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', datads: 'DataAds Daily', datads_weekly: 'DataAds Weekly', weekly: 'SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)', all: 'All Reports' };
             if (!taskStr || taskStr === 'all') return '<span class="task-pill">All Reports</span>';
             return taskStr.split(',').map(t => `<span class="task-pill">${escapeHtml(labels[t.trim()] || t.trim())}</span>`).join('');
         }
@@ -2622,6 +2688,7 @@
                 document.getElementById('setting-ordertype').value = data.ORDER_TYPE_SHEET_URL || '';
                 document.getElementById('setting-addtracker').value = data.DAILY_ADD_TRACKER_SHEET_URL || '';
                 document.getElementById('setting-datads').value = data.DATADS_SHEET_URL || '';
+                document.getElementById('setting-weekly').value = data.SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL || '';
             } catch (error) {
                 showToast('Failed to load settings', 'error');
             }
@@ -2633,7 +2700,8 @@
                 WORK_SHEET_NAME: document.getElementById('setting-worksheet').value,
                 ORDER_TYPE_SHEET_URL: document.getElementById('setting-ordertype').value,
                 DAILY_ADD_TRACKER_SHEET_URL: document.getElementById('setting-addtracker').value,
-                DATADS_SHEET_URL: document.getElementById('setting-datads').value
+                DATADS_SHEET_URL: document.getElementById('setting-datads').value,
+                SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL: document.getElementById('setting-weekly').value
             };
 
             try {

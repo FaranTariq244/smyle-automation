@@ -1294,6 +1294,307 @@ def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
 
 
 # =============================================================================
+# WEEK-OVER-WEEK ASSESSMENT (color-coded table)
+# =============================================================================
+
+_ASSESSMENT_LABEL = "Week-over-week comparison"
+
+# Metrics for the assessment table
+# (display_name, [possible_col_keys], inverted, format_type)
+# inverted=True means lower is better (CPM, CPA, CPC, Cost per LPV)
+_ASSESSMENT_METRICS = [
+    ("Spend",               ['spend'],                                          False, 'euro'),
+    ("Traffic",             ['landingpage views', 'sessions'],                   False, 'number'),
+    ("CPM",                 ['cpm'],                                             True,  'euro'),
+    ("CPC",                 ['cpc'],                                             True,  'euro'),
+    ("CTR",                 ['ctr'],                                             False, 'pct'),
+    ("Click to ATC %",     ['click to add to cart %', 'atc / clicks'],          False, 'pct'),
+    ("Add to Cart",        ['add to cart'],                                     False, 'number'),
+    ("Initiate Checkout",  ['initiate checkout', 'started checkout'],            False, 'number'),
+    ("ATC to Checkout",    ['add to cart to checkout'],                          False, 'pct'),
+    ("Purchases",          ['purchases', 'purchase'],                            False, 'number'),
+    ("ATC to Purchase",    ['add to cart to purchase', 'purchase / atc'],        False, 'pct'),
+    ("IC to Purchase",     ['started checkout to purchase'],                     False, 'pct'),
+    ("Click to Purchase",  ['click to purchase', 'purchase / clicks'],           False, 'pct'),
+    ("ROAS",               ['roas', 'purchase roas'],                            False, 'ratio'),
+    ("CPA",                ['cpa', 'cost per purchase'],                         True,  'euro'),
+    ("AOV",                ['aov'],                                              False, 'euro'),
+]
+
+# Color scheme — shades of green/red depending on magnitude
+# (bg_hex, text_hex)
+_COLOR_STRONG_GOOD   = ("1B5E20", "FFFFFF")  # dark green, white text
+_COLOR_GOOD          = ("388E3C", "FFFFFF")  # medium green, white text
+_COLOR_SLIGHT_GOOD   = ("C8E6C9", "1B5E20")  # light green, dark green text
+_COLOR_NEUTRAL       = ("F5F5F5", "424242")  # light gray, dark gray text
+_COLOR_SLIGHT_BAD    = ("FFCDD2", "B71C1C")  # light red, dark red text
+_COLOR_BAD           = ("E53935", "FFFFFF")  # medium red, white text
+_COLOR_STRONG_BAD    = ("B71C1C", "FFFFFF")  # dark red, white text
+_COLOR_HEADER        = ("1F4E79", "FFFFFF")  # dark blue, white text
+
+
+def _get_performance_color(pct_change_val, inverted: bool):
+    """Return (bg_hex, text_hex) based on % change magnitude and direction."""
+    if pct_change_val is None:
+        return _COLOR_NEUTRAL
+
+    # For inverted metrics (CPM, CPA, CPC), flip the sign
+    effective = -pct_change_val if inverted else pct_change_val
+
+    if effective > 25:
+        return _COLOR_STRONG_GOOD
+    elif effective > 10:
+        return _COLOR_GOOD
+    elif effective > 2:
+        return _COLOR_SLIGHT_GOOD
+    elif effective >= -2:
+        return _COLOR_NEUTRAL
+    elif effective >= -10:
+        return _COLOR_SLIGHT_BAD
+    elif effective >= -25:
+        return _COLOR_BAD
+    else:
+        return _COLOR_STRONG_BAD
+
+
+def _hex_to_rgb(hex_str: str) -> dict:
+    """Convert hex color to Sheets API RGB dict (0-1 floats)."""
+    h = hex_str.lstrip('#')
+    return {
+        "red": int(h[0:2], 16) / 255,
+        "green": int(h[2:4], 16) / 255,
+        "blue": int(h[4:6], 16) / 255,
+    }
+
+
+def _read_row_values(worksheet, row_num: int, col_mapping: Dict[str, int]) -> Dict[str, float]:
+    """Read metric values from a specific row and return as {col_name_lower: value}."""
+    try:
+        row_values = worksheet.row_values(row_num)
+        result = {}
+        for col_name, col_idx in col_mapping.items():
+            if col_idx - 1 < len(row_values):
+                result[col_name] = parse_value(row_values[col_idx - 1])
+            else:
+                result[col_name] = 0.0
+        return result
+    except Exception as e:
+        print(f"    Error reading row {row_num}: {e}")
+        return {}
+
+
+def _find_last_two_data_rows(worksheet, header_row: int) -> List[Tuple[int, str]]:
+    """
+    Find the last two data rows (with any non-empty label in col A) after the header.
+    Skips assessment rows, averages, year markers, and month names.
+    Returns list of (row_num, label) — up to 2 entries, ordered oldest first.
+    """
+    try:
+        col_a = worksheet.col_values(1)
+        data_rows = []
+        for row_idx, cell in enumerate(col_a, start=1):
+            if row_idx <= header_row:
+                continue
+            cell_str = str(cell).strip()
+            if not cell_str:
+                continue
+            if cell_str.startswith(_ASSESSMENT_LABEL):
+                continue
+            cell_lower = cell_str.lower()
+            if cell_lower in ('average', 'average 2025', 'average 2024', 'metric'):
+                continue
+            if re.match(r'^\d{4}$', cell_str):
+                continue
+            from calendar import month_name
+            if cell_str.split()[0] in [m for m in month_name if m]:
+                continue
+            data_rows.append((row_idx, cell_str))
+        return data_rows[-2:] if len(data_rows) >= 2 else data_rows
+    except Exception as e:
+        print(f"    Error finding data rows: {e}")
+        return []
+
+
+def _find_assessment_start(worksheet, header_row: int) -> Optional[int]:
+    """Find the row where an existing assessment starts."""
+    try:
+        col_a = worksheet.col_values(1)
+        for row_idx, cell in enumerate(col_a, start=1):
+            if row_idx <= header_row:
+                continue
+            if str(cell).strip().startswith(_ASSESSMENT_LABEL):
+                return row_idx
+        return None
+    except Exception:
+        return None
+
+
+def _format_value(val: float, fmt_type: str) -> str:
+    """Format a metric value for display in the assessment table."""
+    if val == 0.0:
+        return "-"
+    if fmt_type == 'euro':
+        return f"\u20ac{val:,.2f}"
+    elif fmt_type == 'pct':
+        return f"{val:.2f}%"
+    elif fmt_type == 'ratio':
+        return f"{val:.2f}"
+    else:  # number
+        return f"{val:,.0f}"
+
+
+def _get_val(data: Dict[str, float], keys: List[str]) -> float:
+    """Get a value by trying multiple possible column name keys."""
+    for k in keys:
+        if k in data and data[k] != 0.0:
+            return data[k]
+    return 0.0
+
+
+def write_week_assessment(worksheet, header_row: int, col_mapping: Dict[str, int]):
+    """
+    Read the last two data rows from a weekly sheet and write a color-coded
+    comparison table below the data. Each metric row is shaded green/red
+    depending on performance direction and intensity.
+
+    This function does NOT change any existing data — it only adds/updates
+    the assessment table below the last data row.
+    """
+    try:
+        import time as _time_assess
+
+        # Find the last two data rows
+        last_rows = _find_last_two_data_rows(worksheet, header_row)
+        if len(last_rows) < 2:
+            print("    Not enough data rows for assessment (need at least 2)")
+            return
+
+        prev_row_num, prev_label = last_rows[0]
+        curr_row_num, curr_label = last_rows[1]
+
+        print(f"    Comparing: '{prev_label}' (row {prev_row_num}) vs '{curr_label}' (row {curr_row_num})")
+
+        # Read values from both rows (pace reads to avoid quota)
+        prev_data = _read_row_values(worksheet, prev_row_num, col_mapping)
+        _time_assess.sleep(1)
+        curr_data = _read_row_values(worksheet, curr_row_num, col_mapping)
+        _time_assess.sleep(1)
+
+        if not prev_data or not curr_data:
+            print("    Could not read data for assessment")
+            return
+
+        # --- Build assessment rows ---
+        # Each entry: (row_values_list, bg_hex, text_hex)
+        assessment_rows = []
+
+        # Title row
+        title = f"{_ASSESSMENT_LABEL} ({prev_label} \u2192 {curr_label})"
+        assessment_rows.append(([title, "", "", ""], *_COLOR_HEADER))
+
+        # Header row
+        assessment_rows.append((["Metric", prev_label, curr_label, "Change"], *_COLOR_HEADER))
+
+        # Metric rows
+        for display_name, keys, inverted, fmt_type in _ASSESSMENT_METRICS:
+            prev_val = _get_val(prev_data, keys)
+            curr_val = _get_val(curr_data, keys)
+
+            # Skip metrics where both values are zero (no data)
+            if prev_val == 0.0 and curr_val == 0.0:
+                continue
+
+            # Calculate % change
+            if prev_val != 0:
+                pct = ((curr_val - prev_val) / prev_val) * 100
+            else:
+                pct = None
+
+            # Format display values
+            prev_str = _format_value(prev_val, fmt_type)
+            curr_str = _format_value(curr_val, fmt_type)
+            if pct is not None:
+                change_str = f"{pct:+.1f}%"
+            else:
+                change_str = "new"
+
+            # Get color based on performance
+            bg_hex, text_hex = _get_performance_color(pct, inverted)
+
+            assessment_rows.append(([display_name, prev_str, curr_str, change_str], bg_hex, text_hex))
+
+        # --- Clear old assessment ---
+        existing_start = _find_assessment_start(worksheet, header_row)
+        if existing_start:
+            # Calculate how many rows to clear
+            col_a = worksheet.col_values(1)
+            clear_end = existing_start
+            for row_idx in range(existing_start, len(col_a) + 1):
+                cell_str = str(col_a[row_idx - 1]).strip() if row_idx - 1 < len(col_a) else ""
+                if cell_str or row_idx == existing_start:
+                    clear_end = row_idx
+                elif row_idx > existing_start + 2:
+                    break
+
+            # Batch-clear old assessment cells
+            clear_range = f"A{existing_start}:D{clear_end}"
+            worksheet.batch_clear([clear_range])
+            print(f"    Cleared old assessment ({clear_range})")
+            _time_assess.sleep(1)
+
+        # --- Write new assessment table ---
+        start_row = curr_row_num + 2
+        num_rows = len(assessment_rows)
+        num_cols = 4  # A-D
+
+        # Prepare cell values
+        cell_values = [row_data for row_data, _, _ in assessment_rows]
+
+        # Batch write all values at once
+        end_row = start_row + num_rows - 1
+        cell_range = f"A{start_row}:D{end_row}"
+        worksheet.update(cell_range, cell_values, value_input_option='USER_ENTERED')
+        print(f"    Wrote {num_rows} assessment rows at {cell_range}")
+
+        _time_assess.sleep(1)
+
+        # --- Apply color formatting ---
+        sheet_id = worksheet.id
+        format_requests = []
+
+        for i, (_, bg_hex, text_hex) in enumerate(assessment_rows):
+            row_0 = start_row + i - 1  # 0-based row index
+            format_requests.append({
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": row_0,
+                        "endRowIndex": row_0 + 1,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": num_cols,
+                    },
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": _hex_to_rgb(bg_hex),
+                        "textFormat": {
+                            "bold": i < 2,  # Bold for title + header rows
+                            "foregroundColor": _hex_to_rgb(text_hex),
+                            "fontSize": 11 if i == 0 else 10,
+                        },
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                }
+            })
+
+        worksheet.spreadsheet.batch_update({"requests": format_requests})
+        print(f"    Applied color formatting to {num_rows} rows")
+
+    except Exception as e:
+        print(f"    Warning: Could not write assessment: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# =============================================================================
 # WEEKLY ORCHESTRATOR
 # =============================================================================
 
@@ -1365,9 +1666,9 @@ def write_datads_weekly_data_to_sheets(start_date: datetime, end_date: datetime,
                 sheets_skipped += 1
                 continue
 
-            # Pace API calls to avoid rate limits (1s pause every 3 tabs)
-            if idx > 0 and idx % 3 == 0:
-                _time.sleep(1)
+            # Pace API calls to avoid rate limits (2s pause every 2 tabs)
+            if idx > 0 and idx % 2 == 0:
+                _time.sleep(2)
 
             print(f"\n" + "-" * 80)
             print(f"  PROCESSING: {landing_page}")
@@ -1415,9 +1716,15 @@ def write_datads_weekly_data_to_sheets(start_date: datetime, end_date: datetime,
             print(f"  [SUCCESS] Data written to '{matched_ws.title}' row {date_row}")
             sheets_updated += 1
 
+            # Write week-over-week assessment after data
+            _time.sleep(2)  # Pause before assessment reads
+            print(f"  [ASSESSMENT] Writing week comparison for '{matched_ws.title}'...")
+            write_week_assessment(matched_ws, header_row, column_mapping)
+            _time.sleep(2)  # Pause after assessment writes
+
         # Pause before summary to let API quota recover
         print(f"\n  Waiting for API quota to recover...")
-        _time.sleep(5)
+        _time.sleep(15)
 
         # --- Part 2: Summary sheet ---
         print(f"\n  --- SUMMARY SHEET ---")

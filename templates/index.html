@@ -1004,6 +1004,31 @@
         .settings-tab svg { flex-shrink: 0; }
         .settings-tab-panel { display: none; }
         .settings-tab-panel.active { display: block; }
+        .setting-input-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .setting-input-wrapper .form-input { flex: 1; }
+        .setting-btn {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.15s, border-color 0.15s;
+            flex-shrink: 0;
+        }
+        .setting-btn:hover { color: var(--accent); border-color: var(--accent); }
+        .setting-btn.editing { color: var(--accent); border-color: var(--accent); }
+        .setting-btn.copied { color: #4ade80; border-color: #4ade80; }
+        .setting-field-disabled .form-input { opacity: 0.4; }
+        .setting-field-disabled .setting-edit-btn { opacity: 0.4; pointer-events: none; }
+        .setting-field-disabled .form-label { opacity: 0.4; }
         .mapping-row {
             display: flex;
             align-items: center;
@@ -1912,32 +1937,80 @@
                         <div class="form-row cols-2">
                             <div class="form-group" style="margin-bottom:0;">
                                 <label class="form-label">SPREAD_SHEET_NAME</label>
-                                <input type="text" id="setting-spreadsheet" class="form-input">
+                                <div class="setting-input-wrapper">
+                                    <input type="text" id="setting-spreadsheet" class="form-input" readonly>
+                                    <button class="setting-btn setting-copy-btn" title="Copy" onclick="copySettingValue('setting-spreadsheet', this)">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                    </button>
+                                    <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleSettingEdit('setting-spreadsheet', this)">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                </div>
                             </div>
                             <div class="form-group" style="margin-bottom:0;">
                                 <label class="form-label">WORK_SHEET_NAME</label>
-                                <input type="text" id="setting-worksheet" class="form-input">
+                                <div class="setting-input-wrapper">
+                                    <input type="text" id="setting-worksheet" class="form-input" readonly>
+                                    <button class="setting-btn setting-copy-btn" title="Copy" onclick="copySettingValue('setting-worksheet', this)">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                    </button>
+                                    <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleSettingEdit('setting-worksheet', this)">
+                                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-group" style="margin-top: 16px;" data-report-key="order">
                             <label class="form-label">ORDER_TYPE_SHEET_URL</label>
-                            <input type="text" id="setting-ordertype" class="form-input">
+                            <div class="setting-input-wrapper">
+                                <input type="text" id="setting-ordertype" class="form-input" readonly>
+                                <button class="setting-btn setting-copy-btn" title="Copy" onclick="copySettingValue('setting-ordertype', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                </button>
+                                <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleSettingEdit('setting-ordertype', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </button>
+                            </div>
                         </div>
 
-                        <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-group" style="margin-top: 16px;" data-report-key="addtracker">
                             <label class="form-label">DAILY_ADD_TRACKER_SHEET_URL</label>
-                            <input type="text" id="setting-addtracker" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
+                            <div class="setting-input-wrapper">
+                                <input type="text" id="setting-addtracker" class="form-input" readonly placeholder="https://docs.google.com/spreadsheets/d/...">
+                                <button class="setting-btn setting-copy-btn" title="Copy" onclick="copySettingValue('setting-addtracker', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                </button>
+                                <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleSettingEdit('setting-addtracker', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </button>
+                            </div>
                         </div>
 
-                        <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-group" style="margin-top: 16px;" data-report-key="datads">
                             <label class="form-label">DATADS_SHEET_URL</label>
-                            <input type="text" id="setting-datads" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/...">
+                            <div class="setting-input-wrapper">
+                                <input type="text" id="setting-datads" class="form-input" readonly placeholder="https://docs.google.com/spreadsheets/d/...">
+                                <button class="setting-btn setting-copy-btn" title="Copy" onclick="copySettingValue('setting-datads', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                </button>
+                                <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleSettingEdit('setting-datads', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </button>
+                            </div>
                         </div>
 
-                        <div class="form-group" style="margin-top: 16px;">
+                        <div class="form-group" style="margin-top: 16px;" data-report-key="weekly">
                             <label class="form-label">SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL</label>
-                            <input type="text" id="setting-weekly" class="form-input" placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=... (WEEKLY tab)">
+                            <div class="setting-input-wrapper">
+                                <input type="text" id="setting-weekly" class="form-input" readonly placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=... (WEEKLY tab)">
+                                <button class="setting-btn setting-copy-btn" title="Copy" onclick="copySettingValue('setting-weekly', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                </button>
+                                <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleSettingEdit('setting-weekly', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </button>
+                            </div>
                         </div>
 
                         <div class="divider"></div>
@@ -2709,8 +2782,13 @@
         // Settings handling
         async function loadSettings() {
             try {
-                const response = await fetch('/api/settings');
-                const data = await response.json();
+                const [settingsRes, disabledRes] = await Promise.all([
+                    fetch('/api/settings'),
+                    fetch('/api/disabled-reports')
+                ]);
+                const data = await settingsRes.json();
+                const disabledData = await disabledRes.json();
+                disabledReports = disabledData.disabled || [];
 
                 document.getElementById('setting-spreadsheet').value = data.SPREAD_SHEET_NAME || '';
                 document.getElementById('setting-worksheet').value = data.WORK_SHEET_NAME || '';
@@ -2718,6 +2796,11 @@
                 document.getElementById('setting-addtracker').value = data.DAILY_ADD_TRACKER_SHEET_URL || '';
                 document.getElementById('setting-datads').value = data.DATADS_SHEET_URL || '';
                 document.getElementById('setting-weekly').value = data.SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL || '';
+
+                // Reset all inputs to readonly and clear editing state
+                document.querySelectorAll('#settings-panel-sheets .form-input').forEach(i => i.readOnly = true);
+                document.querySelectorAll('#settings-panel-sheets .setting-edit-btn').forEach(b => b.classList.remove('editing'));
+                applyDisabledToSheetUrls();
             } catch (error) {
                 showToast('Failed to load settings', 'error');
             }
@@ -2744,12 +2827,61 @@
 
                 if (data.success) {
                     showToast('Settings saved', 'success');
+                    // Reset all inputs to readonly after save
+                    document.querySelectorAll('#settings-panel-sheets .form-input').forEach(i => i.readOnly = true);
+                    document.querySelectorAll('#settings-panel-sheets .setting-edit-btn').forEach(b => b.classList.remove('editing'));
                 } else {
                     showToast(data.error || 'Failed to save settings', 'error');
                 }
             } catch (error) {
                 showToast('Failed to save settings', 'error');
             }
+        }
+
+        function copySettingValue(inputId, btn) {
+            const input = document.getElementById(inputId);
+            navigator.clipboard.writeText(input.value).then(() => {
+                btn.classList.add('copied');
+                setTimeout(() => btn.classList.remove('copied'), 1200);
+                showToast('Copied to clipboard', 'success');
+            });
+        }
+
+        function toggleSettingEdit(inputId, btn) {
+            const input = document.getElementById(inputId);
+            const group = input.closest('.form-group');
+            if (group && group.classList.contains('setting-field-disabled')) return;
+            if (input.readOnly) {
+                input.readOnly = false;
+                input.focus();
+                btn.classList.add('editing');
+            } else {
+                input.readOnly = true;
+                btn.classList.remove('editing');
+            }
+        }
+
+        function applyDisabledToSheetUrls() {
+            const groups = document.querySelectorAll('#settings-panel-sheets .form-group[data-report-key]');
+            groups.forEach(group => {
+                const key = group.dataset.reportKey;
+                let isDisabled = false;
+                if (key === 'datads') {
+                    isDisabled = disabledReports.includes('datads') && disabledReports.includes('datads_weekly');
+                } else {
+                    isDisabled = disabledReports.includes(key);
+                }
+                const input = group.querySelector('.form-input');
+                const editBtn = group.querySelector('.setting-edit-btn');
+                if (isDisabled) {
+                    group.classList.add('setting-field-disabled');
+                    if (input) { input.readOnly = true; input.title = 'This report is disabled'; }
+                    if (editBtn) editBtn.classList.remove('editing');
+                } else {
+                    group.classList.remove('setting-field-disabled');
+                    if (input) input.title = '';
+                }
+            });
         }
 
         // ── Log Maintenance Settings ──

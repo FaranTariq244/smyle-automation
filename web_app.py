@@ -26,7 +26,7 @@ os.chdir(PROJECT_ROOT)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config_store import get_settings, set_settings, set_setting
+from config_store import get_setting, get_settings, set_settings, set_setting
 from scheduler import RECURRENCE_CHOICES, ScheduleStore, SchedulerService
 
 app = Flask(__name__)
@@ -64,6 +64,8 @@ SETTINGS_KEYS = [
     "DATADS_SHEET_URL",
     "SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL",
 ]
+
+DEFAULT_MAX_LOG_FILES = 100
 
 
 # ============================================================================
@@ -162,6 +164,24 @@ def start_log_file(task_name: str, date_str: str, origin: str) -> Path | None:
         return None
 
 
+def cleanup_old_logs():
+    """Delete oldest log files when count exceeds MAX_LOG_FILES setting."""
+    try:
+        max_logs = int(get_setting("MAX_LOG_FILES") or DEFAULT_MAX_LOG_FILES)
+        if max_logs <= 0:
+            return
+        log_files = sorted(state.log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)
+        excess = len(log_files) - max_logs
+        if excess > 0:
+            for f in log_files[:excess]:
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def watch_process_output(proc: subprocess.Popen, task: str, date_str: str):
     """Watch process output and stream to websocket."""
     try:
@@ -216,6 +236,8 @@ def on_task_complete(task: str, date_str: str, success: bool):
     state.current_run_origin = "manual"
     state.current_schedule_id = None
     state._completion_in_progress = False
+
+    cleanup_old_logs()
 
 
 def kill_process_tree(pid: int | None):
@@ -972,6 +994,30 @@ def delete_log(filename: str):
         return jsonify({"success": True, "message": "Log deleted"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/log-settings', methods=['GET'])
+def get_log_settings():
+    """Get log retention settings."""
+    max_logs = get_setting("MAX_LOG_FILES") or str(DEFAULT_MAX_LOG_FILES)
+    log_count = len(list(state.log_dir.glob("*.log")))
+    return jsonify({"MAX_LOG_FILES": max_logs, "log_count": log_count})
+
+
+@app.route('/api/log-settings', methods=['POST'])
+def save_log_settings():
+    """Save log retention settings and run cleanup."""
+    data = request.json
+    try:
+        max_logs = int(data.get("MAX_LOG_FILES", DEFAULT_MAX_LOG_FILES))
+        if max_logs < 10:
+            return jsonify({"success": False, "error": "Minimum is 10 logs"}), 400
+        set_setting("MAX_LOG_FILES", str(max_logs))
+        cleanup_old_logs()
+        log_count = len(list(state.log_dir.glob("*.log")))
+        return jsonify({"success": True, "message": "Log settings saved", "log_count": log_count})
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Invalid number"}), 400
 
 
 @app.route('/api/setup-browser', methods=['POST'])

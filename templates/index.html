@@ -1899,6 +1899,10 @@
                             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
                             Column Mappings
                         </button>
+                        <button class="settings-tab" onclick="showSettingsTab('maintenance')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            Maintenance
+                        </button>
                     </div>
 
                     <!-- Tab 1: Sheet URLs -->
@@ -2044,6 +2048,30 @@
                             <button class="btn btn-primary" onclick="saveMappings()">Save Mappings</button>
                             <button class="btn btn-secondary" onclick="resetMappings()">Restore Defaults</button>
                             <button class="btn btn-secondary" onclick="copyDailyToWeekly()" id="btn-copy-to-weekly" style="display:none;">Copy Daily to Weekly</button>
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: Maintenance -->
+                    <div class="settings-tab-panel" id="settings-panel-maintenance">
+                        <div class="card-subtitle" style="margin-bottom:16px;">Log retention and cleanup settings</div>
+
+                        <div class="form-group">
+                            <label class="form-label">Maximum log files to keep</label>
+                            <div style="display:flex; align-items:center; gap:12px;">
+                                <input type="number" id="setting-max-logs" class="form-input" style="width:120px;" min="10" value="100">
+                                <span id="log-count-label" style="font-size:12px; color:var(--text-secondary);"></span>
+                            </div>
+                            <p style="font-size:12px; color:var(--text-muted); margin-top:6px;">
+                                When the count exceeds this limit, the oldest logs are automatically deleted after each run. Minimum: 10.
+                            </p>
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveLogSettings()">Save</button>
+                            <button class="btn btn-secondary" onclick="loadLogSettings()">Reload</button>
+                            <button class="btn btn-danger" onclick="cleanupLogsNow()">Cleanup Now</button>
                         </div>
                     </div>
                 </div>
@@ -2674,6 +2702,7 @@
                 if (tabName === 'sheets') loadSettings();
                 else if (tabName === 'availability') loadReportAvailability();
                 else if (tabName === 'mappings') loadMappings();
+                else if (tabName === 'maintenance') loadLogSettings();
             }
         }
 
@@ -2721,6 +2750,52 @@
             } catch (error) {
                 showToast('Failed to save settings', 'error');
             }
+        }
+
+        // ── Log Maintenance Settings ──
+        async function loadLogSettings() {
+            try {
+                const response = await fetch('/api/log-settings');
+                const data = await response.json();
+                document.getElementById('setting-max-logs').value = data.MAX_LOG_FILES || 100;
+                document.getElementById('log-count-label').textContent = `Currently ${data.log_count} log file(s) on disk`;
+            } catch (error) {
+                showToast('Failed to load log settings', 'error');
+            }
+        }
+
+        async function saveLogSettings() {
+            const maxLogs = parseInt(document.getElementById('setting-max-logs').value);
+            if (isNaN(maxLogs) || maxLogs < 10) {
+                showToast('Minimum is 10 log files', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/api/log-settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ MAX_LOG_FILES: maxLogs })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showToast('Log settings saved', 'success');
+                    document.getElementById('log-count-label').textContent = `Currently ${data.log_count} log file(s) on disk`;
+                } else {
+                    showToast(data.error || 'Failed to save', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to save log settings', 'error');
+            }
+        }
+
+        async function cleanupLogsNow() {
+            const maxLogs = parseInt(document.getElementById('setting-max-logs').value);
+            if (isNaN(maxLogs) || maxLogs < 10) {
+                showToast('Minimum is 10 log files', 'error');
+                return;
+            }
+            if (!confirm(`This will delete logs beyond the ${maxLogs} most recent. Continue?`)) return;
+            await saveLogSettings();
         }
 
         // ── Report Availability (disable/deprecate reports) ──

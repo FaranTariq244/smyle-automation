@@ -1,39 +1,28 @@
 """
 SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly) report runner.
 
-Each Marketing-Deepdive phase below scrapes Facebook first (META rows),
-then — where the sheet has a matching GOOGLE section — flips the Medium
-filter to Google Ads, rescrapes, writes the GOOGLE section, and flips
-back to Facebook so the next phase's country change still operates on
-Facebook scorecards.
+Uses BigQuery directly instead of Looker Studio scraping.
+No Chrome browser needed.
 
 Phase 1: ensure the WEEKLY tab has a column for the selected week under the
          right month (creating the label if necessary).
-Phase 2: scrape Net Revenue / Net Rev. FT / Net Rev. RP from Looker Studio
+Phase 2: query Net Revenue / Net Rev. FT / Net Rev. RP from BigQuery
          and write them into the 'Total', 'New', 'Recurring' rows.
-Phase 3: scrape Marketing Deepdive KPIs (Facebook, no country filter) and
-         write them into the META section, then scrape Google Ads and
+Phase 3: query Marketing Deepdive KPIs (Facebook, no country filter) and
+         write them into the META section, then query Google Ads and
          write the GOOGLE section.
-Phase 4: narrow the Country filter to Netherlands and write META NL.
-Phase 5: narrow the Country filter to Belgium and write META BE.
-Phase 5b: set Country to Netherlands+Belgium, flip Medium to Google Ads,
-         and write GOOGLE NL/BE. (There is no META NL/BE section, so this
-         cannot ride along with Phase 4 or 5.)
-Phase 6: widen the Country filter to Germany + Austria + Switzerland and
-         write META DE/AU/SW, then GOOGLE DE/AU/SW.
-Phase 7: invert the Country filter to "all countries EXCEPT Netherlands,
-         United Kingdom, Germany, Belgium, Switzerland, Austria"
-         (Rest-of-Europe) and write REO, then GOOGLE REO.
-Phase 8: narrow the Country filter to United Kingdom and write META UK,
-         then GOOGLE UK.
+Phase 4: narrow to Netherlands and write META NL.
+Phase 5: narrow to Belgium and write META BE.
+Phase 5b: Netherlands+Belgium, Google Ads -> GOOGLE NL/BE.
+Phase 6: Germany + Austria + Switzerland -> META DE/AU/SW, GOOGLE DE/AU/SW.
+Phase 7: all countries EXCEPT NL, UK, DE, BE, CH, AT (Rest-of-Europe) -> REO, GOOGLE REO.
+Phase 8: United Kingdom -> META UK, GOOGLE UK.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
-
-from browser_manager import BrowserManager
 
 from services.sheets.smyle_online_strategy_rn_fc1_weekly_helpers import (
     col_index_to_letter,
@@ -43,14 +32,9 @@ from services.sheets.smyle_online_strategy_rn_fc1_weekly_helpers import (
     get_weekly_worksheet,
     write_weekly_totals,
 )
-from services.looker.smyle_online_strategy_rn_fc1_weekly_extractor import (
-    extract_weekly_values,
-)
-from services.looker.smyle_online_strategy_rn_fc1_weekly_marketing_extractor import (
-    extract_weekly_marketing_country_values,
-    extract_weekly_marketing_medium_values,
-    extract_weekly_marketing_values,
-    switch_medium,
+from services.bigquery.smyle_online_strategy_rn_fc1_weekly_extractor import (
+    extract_marketing_kpis_bq,
+    extract_weekly_totals_bq,
 )
 
 
@@ -69,7 +53,7 @@ _META_METRIC_TO_ROW = {
 }
 
 # Scraper metric key -> WEEKLY sheet row label for the per-country META
-# sections (META NL, META BE, ...). CPO from Looker Studio maps to the
+# sections (META NL, META BE, ...). CPO from BigQuery maps to the
 # CPA row in these sections.
 _META_COUNTRY_METRIC_TO_ROW = {
     "impressions": "impressions",
@@ -85,7 +69,7 @@ _META_COUNTRY_METRIC_TO_ROW = {
 }
 
 # Scraper metric key -> WEEKLY sheet row label for the GOOGLE (all-countries)
-# section. No Clicks / Impressions / CPC rows exist here — the sheet only
+# section. No Clicks / Impressions / CPC rows exist here -- the sheet only
 # tracks spend-derived KPIs for the Google-Ads-wide total.
 _GOOGLE_METRIC_TO_ROW = {
     "turnover": "Google Turnover",
@@ -99,7 +83,7 @@ _GOOGLE_METRIC_TO_ROW = {
 }
 
 # Scraper metric key -> WEEKLY sheet row label for the per-country GOOGLE
-# sections (GOOGLE NL/BE, GOOGLE DE/AU/SW, GOOGLE REO, GOOGLE UK). Looker's
+# sections (GOOGLE NL/BE, GOOGLE DE/AU/SW, GOOGLE REO, GOOGLE UK). BigQuery's
 # CPO maps to CPA here (same convention as META per-country sections).
 _GOOGLE_COUNTRY_METRIC_TO_ROW = {
     "turnover": "Google Turnover",
@@ -208,7 +192,7 @@ def _build_google_writes(
 ) -> dict:
     """Build {sheet_label: value_or_formula} for the GOOGLE (all-countries) section.
 
-    Google Ads spend-derived KPIs only — no Clicks / Impressions / CPC rows.
+    Google Ads spend-derived KPIs only -- no Clicks / Impressions / CPC rows.
     DAILY SPEND / DAILY ORDERS formulas mirror the META section's formulas.
     """
     writes: dict = {}
@@ -279,37 +263,41 @@ def _build_google_country_writes(
     return writes
 
 
-def _scrape_google_and_write(
-    driver,
+def _query_google_and_write(
+    start_date: datetime,
+    end_date: datetime,
     worksheet,
     column_index: int,
     week_header_row: int,
     google_section_label: str,
     is_main: bool,
+    countries=None,
+    exclude_countries: bool = False,
 ) -> bool:
-    """Switch medium to Google Ads, scrape, write to the given GOOGLE section,
-    and flip medium back to Facebook.
+    """Query Google Ads KPIs from BigQuery and write to the given GOOGLE section.
 
     `is_main=True` uses _build_google_writes (GOOGLE all-countries layout);
     otherwise _build_google_country_writes (per-country layout with CPA /
     clicks / CPC / ORDERS PER DAY).
 
-    Returns True on success (including 'nothing written' warning), False on
-    fatal errors so the caller can abort the whole run.
+    Returns True on success, False on fatal errors.
     """
-    print(f"\n  Switching Medium -> Google Ads for {google_section_label} ...")
+    print(f"\n  Querying BigQuery for {google_section_label} (Google Ads) ...")
     try:
-        scraped = extract_weekly_marketing_medium_values(driver, "Google Ads")
+        scraped = extract_marketing_kpis_bq(
+            start_date, end_date,
+            medium="Google Ads",
+            countries=countries,
+            exclude_countries=exclude_countries,
+        )
     except Exception as exc:
-        print(f"  [ERROR] Google scrape for {google_section_label} failed: {exc}")
+        print(f"  [ERROR] BigQuery query for {google_section_label} failed: {exc}")
         import traceback
         traceback.print_exc()
         return False
 
     for k, v in scraped.items():
-        if k == "_raw":
-            continue
-        print(f"  Scraped  -> {k:<11} = {v!r}")
+        print(f"  BQ  -> {k:<11} = {v!r}")
 
     section_row = find_section_row(
         worksheet, google_section_label, after_row=week_header_row
@@ -348,17 +336,10 @@ def _scrape_google_and_write(
         return False
 
     if not written:
-        print(f"  [WARN] Nothing written - {google_section_label} scrape returned no values.")
+        print(f"  [WARN] Nothing written - {google_section_label} query returned no values.")
     else:
         for label, info in written.items():
             print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
-
-    # Flip medium back so the next country-filter change operates on the
-    # Facebook scorecards again.
-    try:
-        switch_medium(driver, "Facebook")
-    except Exception as exc:
-        print(f"  [WARN] Failed to switch medium back to Facebook: {exc}")
 
     return True
 
@@ -372,7 +353,7 @@ def run_smyle_online_strategy_rn_fc1_weekly_report(
     """Run the weekly report end-to-end for the given range."""
     print("\n")
     print("=" * 80)
-    print("SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)".center(80))
+    print("SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly) [BigQuery]".center(80))
     print("=" * 80)
     print(f"\nSelected range: {start_date_str}  ->  {end_date_str}")
 
@@ -399,482 +380,381 @@ def run_smyle_online_strategy_rn_fc1_weekly_report(
     print(f"  Target column     : {prep['column_letter']} (index {prep['column_index']})")
     print(f"  Action            : {prep['action']}")
 
-    # One Chrome session for both scrape phases.
-    manager: Optional[BrowserManager] = None
+    column_index = prep["column_index"]
+    week_header_row = prep["week_header_row"]
+
+    # ---------------- Phase 2: totals from BigQuery ----------------
+    print("\n[Phase 2] Querying Net Revenue / Net Rev. FT / Net Rev. RP from BigQuery ...")
     try:
-        manager = BrowserManager(use_existing_chrome=False)
-        driver = manager.start_browser()
+        scraped_totals = extract_weekly_totals_bq(start_date_obj, end_date_obj)
+    except Exception as exc:
+        print(f"  [ERROR] BigQuery totals query failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        # ---------------- Phase 2: totals (KPI + Subscriptions) ----------------
-        print("\n[Phase 2] Extracting Net Revenue / Net Rev. FT / Net Rev. RP ...")
-        try:
-            scraped_totals = extract_weekly_values(
-                start_date_obj, end_date_obj, driver=driver
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker totals extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
+    print(
+        f"  BQ  -> Total={scraped_totals.get('total')!r}, "
+        f"Recurring={scraped_totals.get('recurring')!r}, "
+        f"New={scraped_totals.get('new')!r}"
+    )
 
-        print(
-            f"  Scraped  -> Total={scraped_totals.get('total')!r}, "
-            f"Recurring={scraped_totals.get('recurring')!r}, "
-            f"New={scraped_totals.get('new')!r}"
-        )
+    totals_to_write = {
+        "Total": scraped_totals.get("total"),
+        "Recurring": scraped_totals.get("recurring"),
+        "New": scraped_totals.get("new"),
+    }
 
-        totals_to_write = {
-            "Total": scraped_totals.get("total"),
-            "Recurring": scraped_totals.get("recurring"),
-            "New": scraped_totals.get("new"),
-        }
-
-        try:
-            written = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=totals_to_write,
-                week_header_row=prep["week_header_row"],
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (totals) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        if not written:
-            print("  [WARN] Nothing written - all scraped totals were empty.")
-        else:
-            for label, info in written.items():
-                print(f"  [OK] Wrote {label:<10} {info['value']} -> {info['a1']}")
-
-        # ---------------- Phase 3: Marketing Deepdive (Facebook-only) ----------------
-        print("\n[Phase 3] Extracting Marketing Deepdive (Facebook-only) ...")
-        try:
-            scraped_mkt = extract_weekly_marketing_values(
-                start_date_obj, end_date_obj, driver=driver
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker marketing extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        for k, v in scraped_mkt.items():
-            if k == "_raw":
-                continue
-            print(f"  Scraped  -> {k:<11} = {v!r}")
-
-        meta_section_row = find_section_row(
-            worksheet, "META", after_row=prep["week_header_row"]
-        ) or prep["week_header_row"]
-
-        marketing_writes = _build_meta_writes(
-            scraped_mkt,
-            worksheet=worksheet,
-            column_index=prep["column_index"],
-            section_start_row=meta_section_row,
-        )
-
-        try:
-            written_mkt = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=marketing_writes,
-                week_header_row=meta_section_row,
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (META) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        if not written_mkt:
-            print("  [WARN] Nothing written - META scrape returned no values.")
-        else:
-            for label, info in written_mkt.items():
-                print(f"  [OK] Wrote {label:<13} {info['value']} -> {info['a1']}")
-
-        # Ride-along: swap Medium -> Google Ads with the current (no) country filter,
-        # write GOOGLE section, switch back to Facebook.
-        if not _scrape_google_and_write(
-            driver,
+    try:
+        written = write_weekly_totals(
             worksheet,
-            column_index=prep["column_index"],
-            week_header_row=prep["week_header_row"],
-            google_section_label="GOOGLE",
-            is_main=True,
-        ):
-            return False
-
-        # ---------------- Phase 4: Marketing Deepdive (Facebook x Netherlands) ----------------
-        print("\n[Phase 4] Narrowing Country -> Netherlands and rescraping for META NL ...")
-        try:
-            scraped_nl = extract_weekly_marketing_country_values(
-                driver, country_name="Netherlands"
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker NL extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        for k, v in scraped_nl.items():
-            if k == "_raw":
-                continue
-            print(f"  Scraped  -> {k:<11} = {v!r}")
-
-        meta_nl_section_row = find_section_row(
-            worksheet, "META NL", after_row=prep["week_header_row"]
+            column_index=column_index,
+            values=totals_to_write,
+            week_header_row=week_header_row,
         )
-        if meta_nl_section_row is None:
-            print("  [ERROR] Could not find 'META NL' section header in column A.")
-            return False
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (totals) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        nl_writes = _build_meta_country_writes(
-            scraped_nl,
-            worksheet=worksheet,
-            column_index=prep["column_index"],
-            section_start_row=meta_nl_section_row,
-            section_name="META NL",
+    if not written:
+        print("  [WARN] Nothing written - all BigQuery totals were empty.")
+    else:
+        for label, info in written.items():
+            print(f"  [OK] Wrote {label:<10} {info['value']} -> {info['a1']}")
+
+    # ---------------- Phase 3: Marketing Deepdive (Facebook-only) ----------------
+    print("\n[Phase 3] Querying Marketing Deepdive (Facebook) from BigQuery ...")
+    try:
+        scraped_mkt = extract_marketing_kpis_bq(
+            start_date_obj, end_date_obj, medium="Facebook"
         )
+    except Exception as exc:
+        print(f"  [ERROR] BigQuery marketing query failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        try:
-            written_nl = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=nl_writes,
-                week_header_row=meta_nl_section_row,
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (META NL) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
+    for k, v in scraped_mkt.items():
+        print(f"  BQ  -> {k:<11} = {v!r}")
 
-        if not written_nl:
-            print("  [WARN] Nothing written - META NL scrape returned no values.")
-        else:
-            for label, info in written_nl.items():
-                print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
+    meta_section_row = find_section_row(
+        worksheet, "META", after_row=week_header_row
+    ) or week_header_row
 
-        # ---------------- Phase 5: Marketing Deepdive (Facebook x Belgium) ----------------
-        print("\n[Phase 5] Narrowing Country -> Belgium and rescraping for META BE ...")
-        try:
-            scraped_be = extract_weekly_marketing_country_values(
-                driver, country_name="Belgium"
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker BE extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
+    marketing_writes = _build_meta_writes(
+        scraped_mkt,
+        worksheet=worksheet,
+        column_index=column_index,
+        section_start_row=meta_section_row,
+    )
 
-        for k, v in scraped_be.items():
-            if k == "_raw":
-                continue
-            print(f"  Scraped  -> {k:<11} = {v!r}")
-
-        meta_be_section_row = find_section_row(
-            worksheet, "META BE", after_row=prep["week_header_row"]
-        )
-        if meta_be_section_row is None:
-            print("  [ERROR] Could not find 'META BE' section header in column A.")
-            return False
-
-        be_writes = _build_meta_country_writes(
-            scraped_be,
-            worksheet=worksheet,
-            column_index=prep["column_index"],
-            section_start_row=meta_be_section_row,
-            section_name="META BE",
-        )
-
-        try:
-            written_be = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=be_writes,
-                week_header_row=meta_be_section_row,
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (META BE) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        if not written_be:
-            print("  [WARN] Nothing written - META BE scrape returned no values.")
-        else:
-            for label, info in written_be.items():
-                print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
-
-        # ---------------- Phase 5b: Marketing Deepdive (Google Ads x Netherlands+Belgium) ----------------
-        # There is no META NL/BE section, so GOOGLE NL/BE gets its own phase:
-        # change Country to NL+BE, flip Medium to Google Ads, scrape, write,
-        # then flip Medium back to Facebook for Phase 6.
-        print(
-            "\n[Phase 5b] Country -> Netherlands+Belgium, Medium -> Google Ads for GOOGLE NL/BE ..."
-        )
-        try:
-            scraped_gnlbe = extract_weekly_marketing_country_values(
-                driver,
-                country_name=["Netherlands", "Belgium"],
-                medium="Google Ads",
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker GOOGLE NL/BE extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        for k, v in scraped_gnlbe.items():
-            if k == "_raw":
-                continue
-            print(f"  Scraped  -> {k:<11} = {v!r}")
-
-        google_nlbe_section_row = find_section_row(
-            worksheet, "GOOGLE NL/BE", after_row=prep["week_header_row"]
-        )
-        if google_nlbe_section_row is None:
-            print("  [ERROR] Could not find 'GOOGLE NL/BE' section header in column A.")
-            return False
-
-        gnlbe_writes = _build_google_country_writes(
-            scraped_gnlbe,
-            worksheet=worksheet,
-            column_index=prep["column_index"],
-            section_start_row=google_nlbe_section_row,
-            section_name="GOOGLE NL/BE",
-        )
-
-        try:
-            written_gnlbe = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=gnlbe_writes,
-                week_header_row=google_nlbe_section_row,
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (GOOGLE NL/BE) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        if not written_gnlbe:
-            print("  [WARN] Nothing written - GOOGLE NL/BE scrape returned no values.")
-        else:
-            for label, info in written_gnlbe.items():
-                print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
-
-        # Flip Medium back to Facebook so Phase 6's country change operates on FB.
-        try:
-            switch_medium(driver, "Facebook")
-        except Exception as exc:
-            print(f"  [WARN] Failed to switch medium back to Facebook: {exc}")
-
-        # ---------------- Phase 6: Marketing Deepdive (Facebook x DE+AU+SW) ----------------
-        print("\n[Phase 6] Narrowing Country -> Germany+Austria+Switzerland and rescraping for META DE/AU/SW ...")
-        try:
-            scraped_desw = extract_weekly_marketing_country_values(
-                driver, country_name=["Germany", "Austria", "Switzerland"]
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker DE/AU/SW extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        for k, v in scraped_desw.items():
-            if k == "_raw":
-                continue
-            print(f"  Scraped  -> {k:<11} = {v!r}")
-
-        meta_desw_section_row = find_section_row(
-            worksheet, "META DE/AU/SW", after_row=prep["week_header_row"]
-        )
-        if meta_desw_section_row is None:
-            print("  [ERROR] Could not find 'META DE/AU/SW' section header in column A.")
-            return False
-
-        desw_writes = _build_meta_country_writes(
-            scraped_desw,
-            worksheet=worksheet,
-            column_index=prep["column_index"],
-            section_start_row=meta_desw_section_row,
-            section_name="META DE/AU/SW",
-        )
-
-        try:
-            written_desw = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=desw_writes,
-                week_header_row=meta_desw_section_row,
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (META DE/AU/SW) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        if not written_desw:
-            print("  [WARN] Nothing written - META DE/AU/SW scrape returned no values.")
-        else:
-            for label, info in written_desw.items():
-                print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
-
-        # Ride-along: GOOGLE DE/AU/SW uses the same country filter.
-        if not _scrape_google_and_write(
-            driver,
+    try:
+        written_mkt = write_weekly_totals(
             worksheet,
-            column_index=prep["column_index"],
-            week_header_row=prep["week_header_row"],
-            google_section_label="GOOGLE DE/AU/SW",
-            is_main=False,
-        ):
-            return False
-
-        # ---------------- Phase 7: Marketing Deepdive (Facebook x Rest-of-Europe) ----------------
-        # REO = all countries EXCEPT the six already covered above.
-        reo_excluded = [
-            "Netherlands",
-            "United Kingdom",
-            "Germany",
-            "Belgium",
-            "Switzerland",
-            "Austria",
-        ]
-        print(
-            "\n[Phase 7] Inverting Country -> all EXCEPT "
-            + ", ".join(reo_excluded)
-            + " for REO ..."
+            column_index=column_index,
+            values=marketing_writes,
+            week_header_row=meta_section_row,
         )
-        try:
-            scraped_reo = extract_weekly_marketing_country_values(
-                driver, country_name=reo_excluded, exclude=True
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker REO extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (META) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        for k, v in scraped_reo.items():
-            if k == "_raw":
-                continue
-            print(f"  Scraped  -> {k:<11} = {v!r}")
+    if not written_mkt:
+        print("  [WARN] Nothing written - META query returned no values.")
+    else:
+        for label, info in written_mkt.items():
+            print(f"  [OK] Wrote {label:<13} {info['value']} -> {info['a1']}")
 
-        reo_section_row = find_section_row(
-            worksheet, "REO", after_row=prep["week_header_row"]
+    # GOOGLE (all countries)
+    if not _query_google_and_write(
+        start_date_obj, end_date_obj,
+        worksheet, column_index, week_header_row,
+        google_section_label="GOOGLE",
+        is_main=True,
+    ):
+        return False
+
+    # ---------------- Phase 4: Facebook x Netherlands ----------------
+    print("\n[Phase 4] Querying Facebook x Netherlands from BigQuery for META NL ...")
+    try:
+        scraped_nl = extract_marketing_kpis_bq(
+            start_date_obj, end_date_obj,
+            medium="Facebook", countries="Netherlands",
         )
-        if reo_section_row is None:
-            print("  [ERROR] Could not find 'REO' section header in column A.")
-            return False
+    except Exception as exc:
+        print(f"  [ERROR] BigQuery NL query failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        reo_writes = _build_meta_country_writes(
-            scraped_reo,
-            worksheet=worksheet,
-            column_index=prep["column_index"],
-            section_start_row=reo_section_row,
-            section_name="REO",
+    for k, v in scraped_nl.items():
+        print(f"  BQ  -> {k:<11} = {v!r}")
+
+    meta_nl_section_row = find_section_row(
+        worksheet, "META NL", after_row=week_header_row
+    )
+    if meta_nl_section_row is None:
+        print("  [ERROR] Could not find 'META NL' section header in column A.")
+        return False
+
+    nl_writes = _build_meta_country_writes(
+        scraped_nl, worksheet=worksheet, column_index=column_index,
+        section_start_row=meta_nl_section_row, section_name="META NL",
+    )
+
+    try:
+        written_nl = write_weekly_totals(
+            worksheet, column_index=column_index,
+            values=nl_writes, week_header_row=meta_nl_section_row,
         )
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (META NL) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        try:
-            written_reo = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=reo_writes,
-                week_header_row=reo_section_row,
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (REO) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
+    if not written_nl:
+        print("  [WARN] Nothing written - META NL query returned no values.")
+    else:
+        for label, info in written_nl.items():
+            print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
 
-        if not written_reo:
-            print("  [WARN] Nothing written - REO scrape returned no values.")
-        else:
-            for label, info in written_reo.items():
-                print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
-
-        # Ride-along: GOOGLE REO uses the same (inverted) country filter.
-        if not _scrape_google_and_write(
-            driver,
-            worksheet,
-            column_index=prep["column_index"],
-            week_header_row=prep["week_header_row"],
-            google_section_label="GOOGLE REO",
-            is_main=False,
-        ):
-            return False
-
-        # ---------------- Phase 8: Marketing Deepdive (Facebook x United Kingdom) ----------------
-        print("\n[Phase 8] Narrowing Country -> United Kingdom and rescraping for META UK ...")
-        try:
-            scraped_uk = extract_weekly_marketing_country_values(
-                driver, country_name="United Kingdom"
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Looker UK extraction failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-        for k, v in scraped_uk.items():
-            if k == "_raw":
-                continue
-            print(f"  Scraped  -> {k:<11} = {v!r}")
-
-        meta_uk_section_row = find_section_row(
-            worksheet, "META UK", after_row=prep["week_header_row"]
+    # ---------------- Phase 5: Facebook x Belgium ----------------
+    print("\n[Phase 5] Querying Facebook x Belgium from BigQuery for META BE ...")
+    try:
+        scraped_be = extract_marketing_kpis_bq(
+            start_date_obj, end_date_obj,
+            medium="Facebook", countries="Belgium",
         )
-        if meta_uk_section_row is None:
-            print("  [ERROR] Could not find 'META UK' section header in column A.")
-            return False
+    except Exception as exc:
+        print(f"  [ERROR] BigQuery BE query failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        uk_writes = _build_meta_country_writes(
-            scraped_uk,
-            worksheet=worksheet,
-            column_index=prep["column_index"],
-            section_start_row=meta_uk_section_row,
-            section_name="META UK",
+    for k, v in scraped_be.items():
+        print(f"  BQ  -> {k:<11} = {v!r}")
+
+    meta_be_section_row = find_section_row(
+        worksheet, "META BE", after_row=week_header_row
+    )
+    if meta_be_section_row is None:
+        print("  [ERROR] Could not find 'META BE' section header in column A.")
+        return False
+
+    be_writes = _build_meta_country_writes(
+        scraped_be, worksheet=worksheet, column_index=column_index,
+        section_start_row=meta_be_section_row, section_name="META BE",
+    )
+
+    try:
+        written_be = write_weekly_totals(
+            worksheet, column_index=column_index,
+            values=be_writes, week_header_row=meta_be_section_row,
         )
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (META BE) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-        try:
-            written_uk = write_weekly_totals(
-                worksheet,
-                column_index=prep["column_index"],
-                values=uk_writes,
-                week_header_row=meta_uk_section_row,
-            )
-        except Exception as exc:
-            print(f"  [ERROR] Sheet write (META UK) failed: {exc}")
-            import traceback
-            traceback.print_exc()
-            return False
+    if not written_be:
+        print("  [WARN] Nothing written - META BE query returned no values.")
+    else:
+        for label, info in written_be.items():
+            print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
 
-        if not written_uk:
-            print("  [WARN] Nothing written - META UK scrape returned no values.")
-        else:
-            for label, info in written_uk.items():
-                print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
+    # ---------------- Phase 5b: Google Ads x Netherlands+Belgium ----------------
+    print("\n[Phase 5b] Querying Google Ads x NL+BE from BigQuery for GOOGLE NL/BE ...")
+    if not _query_google_and_write(
+        start_date_obj, end_date_obj,
+        worksheet, column_index, week_header_row,
+        google_section_label="GOOGLE NL/BE",
+        is_main=False,
+        countries=["Netherlands", "Belgium"],
+    ):
+        return False
 
-        # Ride-along: GOOGLE UK uses the same UK-only country filter.
-        if not _scrape_google_and_write(
-            driver,
-            worksheet,
-            column_index=prep["column_index"],
-            week_header_row=prep["week_header_row"],
-            google_section_label="GOOGLE UK",
-            is_main=False,
-        ):
-            return False
+    # ---------------- Phase 6: Facebook x DE+AU+SW ----------------
+    print("\n[Phase 6] Querying Facebook x DE+AU+CH from BigQuery for META DE/AU/SW ...")
+    try:
+        scraped_desw = extract_marketing_kpis_bq(
+            start_date_obj, end_date_obj,
+            medium="Facebook",
+            countries=["Germany", "Austria", "Switzerland"],
+        )
+    except Exception as exc:
+        print(f"  [ERROR] BigQuery DE/AU/SW query failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
 
-    finally:
-        if manager is not None:
-            manager.close()
+    for k, v in scraped_desw.items():
+        print(f"  BQ  -> {k:<11} = {v!r}")
+
+    meta_desw_section_row = find_section_row(
+        worksheet, "META DE/AU/SW", after_row=week_header_row
+    )
+    if meta_desw_section_row is None:
+        print("  [ERROR] Could not find 'META DE/AU/SW' section header in column A.")
+        return False
+
+    desw_writes = _build_meta_country_writes(
+        scraped_desw, worksheet=worksheet, column_index=column_index,
+        section_start_row=meta_desw_section_row, section_name="META DE/AU/SW",
+    )
+
+    try:
+        written_desw = write_weekly_totals(
+            worksheet, column_index=column_index,
+            values=desw_writes, week_header_row=meta_desw_section_row,
+        )
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (META DE/AU/SW) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    if not written_desw:
+        print("  [WARN] Nothing written - META DE/AU/SW query returned no values.")
+    else:
+        for label, info in written_desw.items():
+            print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
+
+    # GOOGLE DE/AU/SW
+    if not _query_google_and_write(
+        start_date_obj, end_date_obj,
+        worksheet, column_index, week_header_row,
+        google_section_label="GOOGLE DE/AU/SW",
+        is_main=False,
+        countries=["Germany", "Austria", "Switzerland"],
+    ):
+        return False
+
+    # ---------------- Phase 7: Facebook x Rest-of-Europe ----------------
+    reo_excluded = [
+        "Netherlands", "United Kingdom", "Germany",
+        "Belgium", "Switzerland", "Austria",
+    ]
+    print(
+        "\n[Phase 7] Querying Facebook x all EXCEPT "
+        + ", ".join(reo_excluded)
+        + " for REO ..."
+    )
+    try:
+        scraped_reo = extract_marketing_kpis_bq(
+            start_date_obj, end_date_obj,
+            medium="Facebook",
+            countries=reo_excluded,
+            exclude_countries=True,
+        )
+    except Exception as exc:
+        print(f"  [ERROR] BigQuery REO query failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    for k, v in scraped_reo.items():
+        print(f"  BQ  -> {k:<11} = {v!r}")
+
+    reo_section_row = find_section_row(
+        worksheet, "REO", after_row=week_header_row
+    )
+    if reo_section_row is None:
+        print("  [ERROR] Could not find 'REO' section header in column A.")
+        return False
+
+    reo_writes = _build_meta_country_writes(
+        scraped_reo, worksheet=worksheet, column_index=column_index,
+        section_start_row=reo_section_row, section_name="REO",
+    )
+
+    try:
+        written_reo = write_weekly_totals(
+            worksheet, column_index=column_index,
+            values=reo_writes, week_header_row=reo_section_row,
+        )
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (REO) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    if not written_reo:
+        print("  [WARN] Nothing written - REO query returned no values.")
+    else:
+        for label, info in written_reo.items():
+            print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
+
+    # GOOGLE REO
+    if not _query_google_and_write(
+        start_date_obj, end_date_obj,
+        worksheet, column_index, week_header_row,
+        google_section_label="GOOGLE REO",
+        is_main=False,
+        countries=reo_excluded,
+        exclude_countries=True,
+    ):
+        return False
+
+    # ---------------- Phase 8: Facebook x United Kingdom ----------------
+    print("\n[Phase 8] Querying Facebook x UK from BigQuery for META UK ...")
+    try:
+        scraped_uk = extract_marketing_kpis_bq(
+            start_date_obj, end_date_obj,
+            medium="Facebook", countries="United Kingdom",
+        )
+    except Exception as exc:
+        print(f"  [ERROR] BigQuery UK query failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    for k, v in scraped_uk.items():
+        print(f"  BQ  -> {k:<11} = {v!r}")
+
+    meta_uk_section_row = find_section_row(
+        worksheet, "META UK", after_row=week_header_row
+    )
+    if meta_uk_section_row is None:
+        print("  [ERROR] Could not find 'META UK' section header in column A.")
+        return False
+
+    uk_writes = _build_meta_country_writes(
+        scraped_uk, worksheet=worksheet, column_index=column_index,
+        section_start_row=meta_uk_section_row, section_name="META UK",
+    )
+
+    try:
+        written_uk = write_weekly_totals(
+            worksheet, column_index=column_index,
+            values=uk_writes, week_header_row=meta_uk_section_row,
+        )
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (META UK) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    if not written_uk:
+        print("  [WARN] Nothing written - META UK query returned no values.")
+    else:
+        for label, info in written_uk.items():
+            print(f"  [OK] Wrote {label:<14} {info['value']} -> {info['a1']}")
+
+    # GOOGLE UK
+    if not _query_google_and_write(
+        start_date_obj, end_date_obj,
+        worksheet, column_index, week_header_row,
+        google_section_label="GOOGLE UK",
+        is_main=False,
+        countries="United Kingdom",
+    ):
+        return False
 
     print("\n[OK] Weekly report done.\n")
     return True
@@ -890,7 +770,7 @@ def _parse(date_str: str) -> Optional[datetime]:
 
 
 def main() -> None:
-    print("\nSMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly) - standalone runner")
+    print("\nSMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly) - standalone runner [BigQuery]")
     start_raw = input("Start date (DD-MMM-YYYY): ").strip()
     end_raw = input("End   date (DD-MMM-YYYY): ").strip()
 

@@ -13,6 +13,10 @@ auth.json
 credentials.json
 token.json
 
+# BigQuery credentials
+bigquery_auth.json
+bigquery_sa.json
+
 # Environment variables
 .env
 

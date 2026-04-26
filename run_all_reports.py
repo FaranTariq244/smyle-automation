@@ -46,7 +46,7 @@ def get_date_input():
     print("RUN ALL REPORTS - PARENT RUNNER".center(80))
     print("="*80)
     print("\nThis will run BOTH report extractions:")
-    print("  1. Daily Report (Overall, Facebook, Google Ads)")
+    print("  1. Daily Report via BigQuery (Overall, Facebook, Google Ads) - no browser needed")
     print("  2. Order Type Report (Order Types, Marketing Spend, Klaviyo)")
     print("\n" + "="*80)
 
@@ -77,71 +77,27 @@ def get_date_input():
 
 
 def run_daily_report(date_obj, date_str):
-    """Run the daily report extraction."""
+    """Run the daily report extraction via BigQuery (no browser needed)."""
     print("\n\n")
     print("█" * 80)
-    print("REPORT 1 OF 2: DAILY REPORT".center(80))
+    print("REPORT 1 OF 2: DAILY REPORT (BigQuery)".center(80))
     print("█" * 80 + "\n")
 
     try:
-        # Import the daily report modules
-        from browser_manager import BrowserManager
-        from looker_data_extractor import LookerDataExtractor
+        from extract_daily_report_bq import query_daily_kpis
         from services.sheets.helpers import write_marketing_data
         from dotenv import load_dotenv
-        import time
 
         load_dotenv()
 
-        REPORT_URL = "https://lookerstudio.google.com/u/0/reporting/ddcef9f1-b6d4-4ed3-86e3-38c70a521a2c/page/M05qB"
+        print("[1/3] Querying BigQuery for Overall...")
+        overall = query_daily_kpis(date_obj, medium=None)
 
-        print("[1/9] Opening browser...")
-        manager = BrowserManager(use_existing_chrome=False)
-        driver = manager.start_browser()
+        print("[2/3] Querying BigQuery for Facebook...")
+        facebook = query_daily_kpis(date_obj, medium='Facebook')
 
-        print("[2/9] Navigating to report...")
-        driver.get(REPORT_URL)
-        time.sleep(5)
-
-        # Check if login needed
-        if "accounts.google.com" in driver.current_url:
-            print("\n⚠️  Google login required - restarting browser in visible mode...")
-            manager.close()
-            time.sleep(2)
-            manager = BrowserManager(use_existing_chrome=False)
-            driver = manager.start_browser(headless=False)
-            driver.get(REPORT_URL)
-            time.sleep(5)
-            print("⚠️  Please login in the browser window...")
-            while "accounts.google.com" in driver.current_url:
-                time.sleep(2)
-            print("✓ Login successful")
-            # Switch back after login (cookies saved in profile) - respects HEADLESS_MODE env var
-            manager.close()
-            time.sleep(2)
-            manager = BrowserManager(use_existing_chrome=False)
-            driver = manager.start_browser()
-            driver.get(REPORT_URL)
-            time.sleep(5)
-
-        extractor = LookerDataExtractor(driver)
-
-        # Extract data
-        print(f"[3/9] Setting date range...")
-        extractor.set_date_range(date_obj, date_obj)
-
-        print(f"[4/9] Extracting overall metrics...")
-        overall = extractor.extract_metrics()
-
-        print(f"[6/9] Filtering to Facebook...")
-        extractor.select_medium('Facebook')
-        print(f"[7/9] Extracting Facebook metrics...")
-        facebook = extractor.extract_metrics()
-
-        print(f"[8/9] Filtering to Google Ads...")
-        extractor.select_medium('Google Ads')
-        print(f"[9/9] Extracting Google Ads metrics...")
-        google_ads = extractor.extract_metrics()
+        print("[3/3] Querying BigQuery for Google Ads...")
+        google_ads = query_daily_kpis(date_obj, medium='Google Ads')
 
         # Display results
         print("\n" + "="*80)
@@ -152,16 +108,13 @@ def run_daily_report(date_obj, date_str):
             print(f"\n{source.upper()}")
             print("-" * 40)
             print(f"Conversions:      {metrics.get('Conversions', 0):>15,.0f}")
-            print(f"Spend:            €{metrics.get('Spend', 0):>14,.2f}")
+            print(f"Spend:            \u20ac{metrics.get('Spend', 0):>14,.2f}")
             print(f"ROAS:             {metrics.get('ROAS', 0):>15.2f}")
 
         # Save to Google Sheets
-        print("\n[10/10] Saving to Google Sheets...")
+        print("\nSaving to Google Sheets...")
         write_marketing_data(date_obj, overall, facebook, google_ads)
         print("  ✓ Successfully saved to Google Sheets!")
-
-        # Close browser
-        manager.close()
 
         print("\n✓ Daily Report completed successfully!")
         return True
@@ -322,8 +275,8 @@ def main():
     print("STARTING AUTOMATED EXTRACTION".center(80))
     print("="*80)
     print(f"\nDate: {date_str}")
-    print("Both reports will run sequentially to avoid browser conflicts.")
-    print("Each browser session will close before the next one starts.")
+    print("Daily report runs via BigQuery (instant, no browser).")
+    print("Order Type report still uses browser automation.")
     print("\n" + "="*80)
 
     # Track results

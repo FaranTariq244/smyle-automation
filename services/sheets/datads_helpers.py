@@ -1492,23 +1492,7 @@ def write_week_assessment(worksheet, header_row: int, col_mapping: Dict[str, int
         # Determine which column has date ranges (col 2 if 'wk' column exists, else col 1)
         date_col = col_mapping.get('date', 1)
 
-        # --- DIAGNOSTIC LOGGING ---
-        print(f"    [DIAG] current_row={current_row}, header_row={header_row}, date_col={date_col}, sheet='{worksheet.title}'")
-
-        # --- Clear ALL old assessment data FIRST (values + formatting) ---
         col_dates = worksheet.col_values(date_col)
-
-        # Log date column content below header for debugging
-        print(f"    [DIAG] Date column ({date_col}) has {len(col_dates)} rows total. Content below header:")
-        for row_idx, cell in enumerate(col_dates, start=1):
-            if row_idx <= header_row:
-                continue
-            cell_str = str(cell).strip()
-            if cell_str:
-                is_date = _parse_date_range_from_cell(cell_str) is not None
-                marker = "DATE" if is_date else "NOT-DATE"
-                match_marker = " <<<CURRENT_ROW" if row_idx == current_row else ""
-                print(f"    [DIAG]   row {row_idx}: '{cell_str}' [{marker}]{match_marker}")
 
         # Find all date rows in the contiguous data block after header.
         # Stop at first empty row to avoid picking up dates from old assessment tables.
@@ -1525,7 +1509,6 @@ def write_week_assessment(worksheet, header_row: int, col_mapping: Dict[str, int
             if _parse_date_range_from_cell(cell_str) is not None:
                 date_rows.append((row_idx, cell_str))
 
-        print(f"    [DIAG] Date rows found: {date_rows}")
         last_date_row = date_rows[-1][0] if date_rows else header_row
 
         # Clear from one row after last date row to end of content
@@ -1578,31 +1561,24 @@ def write_week_assessment(worksheet, header_row: int, col_mapping: Dict[str, int
             prev_row_num = None
             prev_label = None
 
-            print(f"    [DIAG] Searching for current_row={current_row} in date_rows...")
             for row_num, label in date_rows:
                 if row_num == current_row:
                     curr_label = label
-                    print(f"    [DIAG]   MATCHED current: row {row_num} = '{label}'")
                 elif row_num > current_row and prev_row_num is None:
                     # First date row below current = previous week (newest-on-top order)
                     prev_row_num = row_num
                     prev_label = label
-                    print(f"    [DIAG]   MATCHED previous: row {row_num} = '{label}'")
 
             if not curr_label or not prev_row_num:
-                print(f"    [DIAG] FAILED: curr_label={curr_label}, prev_row_num={prev_row_num}")
                 print(f"    Could not find current row {current_row} or previous week in date rows")
-                print(f"    Date rows found: {date_rows}")
                 return
         else:
             # Fallback: newest-on-top, first two date rows are curr and prev
-            print(f"    [DIAG] No current_row passed — using fallback (first two date rows)")
             curr_row_num, curr_label = date_rows[0]
             prev_row_num, prev_label = date_rows[1]
 
         bottom_row_num = last_date_row
 
-        print(f"    [DIAG] RESULT: curr='{curr_label}' (row {curr_row_num}), prev='{prev_label}' (row {prev_row_num}), bottom={bottom_row_num}")
         print(f"    Comparing: '{prev_label}' (row {prev_row_num}) vs '{curr_label}' (row {curr_row_num})")
 
         # Read values from both rows (pace reads to avoid quota)

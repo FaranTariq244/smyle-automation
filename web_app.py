@@ -464,15 +464,20 @@ def save_disabled_reports():
 @app.route('/api/datads-mappings', methods=['GET'])
 def get_datads_mappings():
     """Get DataAds column mappings for daily and weekly modes."""
+    import json as _json
     from services.sheets.datads_helpers import get_column_mappings, DEFAULT_COLUMN_MAPPINGS
     daily = get_column_mappings('daily')
     weekly = get_column_mappings('weekly')
     defaults = [{"datads_field": m.datads_field, "sheet_column": m.sheet_column}
                 for m in DEFAULT_COLUMN_MAPPINGS]
+    # Spend filter settings
+    sf_raw = get_setting('DATADS_WEEKLY_SPEND_FILTER')
+    spend_filter = _json.loads(sf_raw) if sf_raw else {"enabled": False, "min_spend": 1000}
     return jsonify({
         'daily': daily,
         'weekly': weekly,
         'defaults': defaults,
+        'spend_filter': spend_filter,
     })
 
 
@@ -489,6 +494,12 @@ def save_datads_mappings():
 
     key = f"DATADS_{mode.upper()}_MAPPINGS"
     set_setting(key, _json.dumps(mappings))
+
+    # Save spend filter if provided (weekly mode)
+    spend_filter = data.get('spend_filter')
+    if spend_filter is not None and mode == 'weekly':
+        set_setting('DATADS_WEEKLY_SPEND_FILTER', _json.dumps(spend_filter))
+
     return jsonify({'success': True, 'message': f'{mode.title()} mappings saved'})
 
 

@@ -94,6 +94,8 @@ def get_column_mapping_objects(mode: str = 'daily') -> List[ColumnMapping]:
 def get_sheet_headers(mode: str = 'daily') -> List[str]:
     """Get ordered sheet headers for the given mode."""
     mappings = get_column_mapping_objects(mode)
+    if mode == 'weekly':
+        return ["wk", "Date"] + [m.sheet_column for m in mappings]
     return ["Date"] + [m.sheet_column for m in mappings]
 
 
@@ -841,14 +843,14 @@ def format_date_range_label(start_date: datetime, end_date: datetime, include_we
 
 
 def find_date_range_row(worksheet, start_date: datetime, end_date: datetime,
-                        header_row: int) -> Optional[int]:
+                        header_row: int, date_col: int = 1) -> Optional[int]:
     """
     Find an existing row that matches this date range in a weekly tab.
-    Searches for the date range label string.
+    Searches for the date range label string in the given column.
     """
     label = format_date_range_label(start_date, end_date)
     try:
-        date_column = worksheet.col_values(1)
+        date_column = worksheet.col_values(date_col)
         for row_idx, cell_value in enumerate(date_column, start=1):
             if row_idx <= header_row:
                 continue
@@ -928,35 +930,46 @@ def _parse_date_range_from_cell(cell_str: str) -> Optional[Tuple[datetime, datet
 
 
 def add_date_range_row(worksheet, start_date: datetime, end_date: datetime,
-                       header_row: int) -> int:
+                       header_row: int, date_col: int = 1, wk_col: int = None) -> int:
     """
     Add a new date range row in correct chronological order.
     Newest dates go on top (closer to header), older dates go down.
 
+    Args:
+        date_col: Column number where date ranges are stored (1 for old format, 2 for new with wk column)
+        wk_col: Column number for week label (e.g. 1). If set, writes "wk N" there.
+
     Returns row number where the date range was added.
     """
     label = format_date_range_label(start_date, end_date)
+    week_num = start_date.isocalendar()[1]
+    wk_label = f"wk {week_num}"
     target_start = datetime(start_date.year, start_date.month, start_date.day)
 
     try:
-        date_column = worksheet.col_values(1)
+        date_column = worksheet.col_values(date_col)
 
-        # Collect existing date range rows
+        # Collect existing date range rows (stop at first empty row to avoid assessment artifacts)
         range_rows = []  # list of (row_number, start_datetime)
         last_data_row = header_row
 
         for row_idx in range(header_row + 1, len(date_column) + 1):
             cell_str = str(date_column[row_idx - 1]).strip() if row_idx - 1 < len(date_column) else ""
-            if cell_str:
-                last_data_row = row_idx
-                parsed = _parse_date_range_from_cell(cell_str)
-                if parsed:
-                    range_rows.append((row_idx, parsed[0]))  # Use start date for ordering
+            if not cell_str:
+                if range_rows:
+                    break  # End of contiguous data block
+                continue
+            last_data_row = row_idx
+            parsed = _parse_date_range_from_cell(cell_str)
+            if parsed:
+                range_rows.append((row_idx, parsed[0]))  # Use start date for ordering
 
         if not range_rows:
             new_row = header_row + 1
-            worksheet.update_cell(new_row, 1, label)
-            print(f"    Added date range '{label}' at row {new_row} (first entry)")
+            worksheet.update_cell(new_row, date_col, label)
+            if wk_col:
+                worksheet.update_cell(new_row, wk_col, wk_label)
+            print(f"    Added date range '{wk_label} | {label}' at row {new_row} (first entry)")
             return new_row
 
         # Newest on top: insert before the first existing row that is OLDER than target
@@ -967,14 +980,21 @@ def add_date_range_row(worksheet, start_date: datetime, end_date: datetime,
                 break
 
         if insert_before_row:
-            worksheet.insert_row([label], insert_before_row)
-            print(f"    Inserted date range '{label}' at row {insert_before_row} (newest on top)")
+            # Build row values — fill columns up to date_col
+            row_values = [''] * date_col
+            row_values[date_col - 1] = label
+            if wk_col:
+                row_values[wk_col - 1] = wk_label
+            worksheet.insert_row(row_values, insert_before_row)
+            print(f"    Inserted date range '{wk_label} | {label}' at row {insert_before_row} (newest on top)")
             return insert_before_row
         else:
             # Target is older than all existing - append at end
             new_row = last_data_row + 1
-            worksheet.update_cell(new_row, 1, label)
-            print(f"    Added date range '{label}' at row {new_row} (oldest)")
+            worksheet.update_cell(new_row, date_col, label)
+            if wk_col:
+                worksheet.update_cell(new_row, wk_col, wk_label)
+            print(f"    Added date range '{wk_label} | {label}' at row {new_row} (oldest)")
             return new_row
 
     except Exception as e:
@@ -1385,9 +1405,15 @@ def _read_row_values(worksheet, row_num: int, col_mapping: Dict[str, int]) -> Di
 
 def _find_last_two_data_rows(worksheet, header_row: int) -> List[Tuple[int, str]]:
     """
-    Find the last two data rows (with any non-empty label in col A) after the header.
-    Skips assessment rows, averages, year markers, and month names.
-    Returns list of (row_num, label) — up to 2 entries, ordered oldest first.
+    Find the two most recent data rows in a weekly tab.
+    Only accepts rows whose column A value parses as a valid date range
+    (e.g. '13 - 19 Apr 2026'). This prevents picking up leftover text from
+    old assessment tables.
+    Data is ordered newest-on-top, so the first two date rows are the most recent.
+    Returns [(prev_row, prev_label), (curr_row, curr_label), (bottom_row, bottom_label)]
+    — index 0 = previous week, index 1 = current week, index 2 = bottom-most data row
+    (for positioning the assessment table below all data).
+    If fewer than 2 data rows exist, returns what's available.
     """
     try:
         col_a = worksheet.col_values(1)
@@ -1398,18 +1424,14 @@ def _find_last_two_data_rows(worksheet, header_row: int) -> List[Tuple[int, str]
             cell_str = str(cell).strip()
             if not cell_str:
                 continue
-            if cell_str.startswith(_ASSESSMENT_LABEL):
-                continue
-            cell_lower = cell_str.lower()
-            if cell_lower in ('average', 'average 2025', 'average 2024', 'metric'):
-                continue
-            if re.match(r'^\d{4}$', cell_str):
-                continue
-            from calendar import month_name
-            if cell_str.split()[0] in [m for m in month_name if m]:
+            # Only accept cells that are valid date ranges
+            if _parse_date_range_from_cell(cell_str) is None:
                 continue
             data_rows.append((row_idx, cell_str))
-        return data_rows[-2:] if len(data_rows) >= 2 else data_rows
+        # Newest is at top (first rows). Return [prev, curr, bottom].
+        if len(data_rows) >= 2:
+            return [data_rows[1], data_rows[0], data_rows[-1]]  # [prev, curr, bottom]
+        return data_rows
     except Exception as e:
         print(f"    Error finding data rows: {e}")
         return []
@@ -1451,27 +1473,136 @@ def _get_val(data: Dict[str, float], keys: List[str]) -> float:
     return 0.0
 
 
-def write_week_assessment(worksheet, header_row: int, col_mapping: Dict[str, int]):
+def write_week_assessment(worksheet, header_row: int, col_mapping: Dict[str, int],
+                          current_row: int = None):
     """
-    Read the last two data rows from a weekly sheet and write a color-coded
-    comparison table below the data. Each metric row is shaded green/red
-    depending on performance direction and intensity.
+    Compare the current week's data row with the previous week and write a
+    color-coded comparison table below all data rows.
 
-    This function does NOT change any existing data — it only adds/updates
-    the assessment table below the last data row.
+    Args:
+        worksheet: The gspread worksheet
+        header_row: Row number of the header
+        col_mapping: {col_name_lower: col_index}
+        current_row: Row number of the current week's data (the one just written).
+                     If provided, the previous week is found as the next date row below it.
     """
     try:
         import time as _time_assess
 
-        # Find the last two data rows
-        last_rows = _find_last_two_data_rows(worksheet, header_row)
-        if len(last_rows) < 2:
+        # Determine which column has date ranges (col 2 if 'wk' column exists, else col 1)
+        date_col = col_mapping.get('date', 1)
+
+        # --- DIAGNOSTIC LOGGING ---
+        print(f"    [DIAG] current_row={current_row}, header_row={header_row}, date_col={date_col}, sheet='{worksheet.title}'")
+
+        # --- Clear ALL old assessment data FIRST (values + formatting) ---
+        col_dates = worksheet.col_values(date_col)
+
+        # Log date column content below header for debugging
+        print(f"    [DIAG] Date column ({date_col}) has {len(col_dates)} rows total. Content below header:")
+        for row_idx, cell in enumerate(col_dates, start=1):
+            if row_idx <= header_row:
+                continue
+            cell_str = str(cell).strip()
+            if cell_str:
+                is_date = _parse_date_range_from_cell(cell_str) is not None
+                marker = "DATE" if is_date else "NOT-DATE"
+                match_marker = " <<<CURRENT_ROW" if row_idx == current_row else ""
+                print(f"    [DIAG]   row {row_idx}: '{cell_str}' [{marker}]{match_marker}")
+
+        # Find all date rows in the contiguous data block after header.
+        # Stop at first empty row to avoid picking up dates from old assessment tables.
+        date_rows = []  # [(row_num, label)]
+        for row_idx, cell in enumerate(col_dates, start=1):
+            if row_idx <= header_row:
+                continue
+            cell_str = str(cell).strip()
+            if not cell_str:
+                # Empty row = end of data block (assessment is below a gap)
+                if date_rows:
+                    break
+                continue
+            if _parse_date_range_from_cell(cell_str) is not None:
+                date_rows.append((row_idx, cell_str))
+
+        print(f"    [DIAG] Date rows found: {date_rows}")
+        last_date_row = date_rows[-1][0] if date_rows else header_row
+
+        # Clear from one row after last date row to end of content
+        # Use column A length to determine total rows (assessment is always in A-D)
+        col_a_len = len(worksheet.col_values(1)) if date_col != 1 else len(col_dates)
+        total_rows = max(col_a_len, len(col_dates))
+        if last_date_row < total_rows:
+            clear_start = last_date_row + 1
+            clear_end = total_rows
+            clear_range = f"A{clear_start}:D{clear_end}"
+            worksheet.batch_clear([clear_range])
+            print(f"    Cleared old assessment values ({clear_range})")
+
+            sheet_id = worksheet.id
+            worksheet.spreadsheet.batch_update({"requests": [{
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": clear_start - 1,
+                        "endRowIndex": clear_end,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": 4,
+                    },
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                        "textFormat": {
+                            "bold": False,
+                            "foregroundColor": {"red": 0, "green": 0, "blue": 0},
+                            "fontSize": 10,
+                        },
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                }
+            }]})
+            print(f"    Cleared old assessment formatting ({clear_range})")
+            _time_assess.sleep(1)
+        else:
+            print(f"    No old assessment to clear")
+
+        # --- Determine which two rows to compare ---
+        if len(date_rows) < 2:
             print("    Not enough data rows for assessment (need at least 2)")
             return
 
-        prev_row_num, prev_label = last_rows[0]
-        curr_row_num, curr_label = last_rows[1]
+        if current_row is not None:
+            # We know exactly which row was just written — find the next date row
+            # below it (the previous week)
+            curr_row_num = current_row
+            curr_label = None
+            prev_row_num = None
+            prev_label = None
 
+            print(f"    [DIAG] Searching for current_row={current_row} in date_rows...")
+            for row_num, label in date_rows:
+                if row_num == current_row:
+                    curr_label = label
+                    print(f"    [DIAG]   MATCHED current: row {row_num} = '{label}'")
+                elif row_num > current_row and prev_row_num is None:
+                    # First date row below current = previous week (newest-on-top order)
+                    prev_row_num = row_num
+                    prev_label = label
+                    print(f"    [DIAG]   MATCHED previous: row {row_num} = '{label}'")
+
+            if not curr_label or not prev_row_num:
+                print(f"    [DIAG] FAILED: curr_label={curr_label}, prev_row_num={prev_row_num}")
+                print(f"    Could not find current row {current_row} or previous week in date rows")
+                print(f"    Date rows found: {date_rows}")
+                return
+        else:
+            # Fallback: newest-on-top, first two date rows are curr and prev
+            print(f"    [DIAG] No current_row passed — using fallback (first two date rows)")
+            curr_row_num, curr_label = date_rows[0]
+            prev_row_num, prev_label = date_rows[1]
+
+        bottom_row_num = last_date_row
+
+        print(f"    [DIAG] RESULT: curr='{curr_label}' (row {curr_row_num}), prev='{prev_label}' (row {prev_row_num}), bottom={bottom_row_num}")
         print(f"    Comparing: '{prev_label}' (row {prev_row_num}) vs '{curr_label}' (row {curr_row_num})")
 
         # Read values from both rows (pace reads to avoid quota)
@@ -1523,27 +1654,8 @@ def write_week_assessment(worksheet, header_row: int, col_mapping: Dict[str, int
 
             assessment_rows.append(([display_name, prev_str, curr_str, change_str], bg_hex, text_hex))
 
-        # --- Clear old assessment ---
-        existing_start = _find_assessment_start(worksheet, header_row)
-        if existing_start:
-            # Calculate how many rows to clear
-            col_a = worksheet.col_values(1)
-            clear_end = existing_start
-            for row_idx in range(existing_start, len(col_a) + 1):
-                cell_str = str(col_a[row_idx - 1]).strip() if row_idx - 1 < len(col_a) else ""
-                if cell_str or row_idx == existing_start:
-                    clear_end = row_idx
-                elif row_idx > existing_start + 2:
-                    break
-
-            # Batch-clear old assessment cells
-            clear_range = f"A{existing_start}:D{clear_end}"
-            worksheet.batch_clear([clear_range])
-            print(f"    Cleared old assessment ({clear_range})")
-            _time_assess.sleep(1)
-
-        # --- Write new assessment table ---
-        start_row = curr_row_num + 2
+        # --- Write new assessment table (below all data rows) ---
+        start_row = bottom_row_num + 2
         num_rows = len(assessment_rows)
         num_cols = 4  # A-D
 
@@ -1623,6 +1735,30 @@ def write_datads_weekly_data_to_sheets(start_date: datetime, end_date: datetime,
 
     print(f"\n  Total DataAds rows: {len(datads_data)}")
 
+    # --- Apply minimum spend filter ---
+    import json as _json
+    sf_raw = get_setting('DATADS_WEEKLY_SPEND_FILTER')
+    spend_filter = _json.loads(sf_raw) if sf_raw else {"enabled": False, "min_spend": 1000}
+    if spend_filter.get('enabled'):
+        min_spend = float(spend_filter.get('min_spend', 0))
+        print(f"\n  [SPEND FILTER] Enabled — minimum spend: {min_spend}")
+        original_count = len(datads_data)
+        filtered = []
+        for row in datads_data:
+            row_spend = parse_value(row.get('Spend', '0'))
+            if row_spend >= min_spend:
+                filtered.append(row)
+            else:
+                lp = row.get('Landing page', 'N/A')
+                print(f"  [SPEND FILTER] Skipped: {lp} (spend: {row_spend} < {min_spend})")
+        datads_data = filtered
+        print(f"  [SPEND FILTER] Kept {len(datads_data)}/{original_count} rows")
+        if not datads_data:
+            print("  [SPEND FILTER] All rows filtered out — nothing to write")
+            return False
+    else:
+        print(f"\n  [SPEND FILTER] Disabled — all rows included")
+
     # Show data summary
     print("\n" + "=" * 80)
     print("DATADS WEEKLY DATA SUMMARY")
@@ -1651,6 +1787,9 @@ def write_datads_weekly_data_to_sheets(start_date: datetime, end_date: datetime,
             sheet_url = find_url_in_sheet(ws)
             if sheet_url:
                 url_to_sheet[ws.title] = (ws, sheet_url)
+                print(f"    [URL] '{ws.title}' -> {sheet_url}")
+            else:
+                print(f"    [URL] '{ws.title}' -> NO URL FOUND")
 
         existing_names = [ws.title for ws in spreadsheet.worksheets()]
 
@@ -1697,13 +1836,22 @@ def write_datads_weekly_data_to_sheets(start_date: datetime, end_date: datetime,
                 sheets_skipped += 1
                 continue
 
+            # Determine date and week columns from header mapping
+            date_col = column_mapping.get('date', 1)
+            wk_col = column_mapping.get('wk')
+
             # Find or create date range row
-            date_row = find_date_range_row(matched_ws, start_date, end_date, header_row)
+            date_row = find_date_range_row(matched_ws, start_date, end_date, header_row, date_col=date_col)
             if date_row:
                 print(f"  Date range row exists at row {date_row} - will update")
+                # Update week number if wk column exists (in case it was missing)
+                if wk_col:
+                    week_num = start_date.isocalendar()[1]
+                    matched_ws.update_cell(date_row, wk_col, f"wk {week_num}")
             else:
                 print(f"  Date range not found - adding new row...")
-                date_row = add_date_range_row(matched_ws, start_date, end_date, header_row)
+                date_row = add_date_range_row(matched_ws, start_date, end_date, header_row,
+                                              date_col=date_col, wk_col=wk_col)
 
             # Map and write data
             column_data = map_datads_to_sheet_columns(datads_row, column_mapping, mode='weekly')
@@ -1718,8 +1866,8 @@ def write_datads_weekly_data_to_sheets(start_date: datetime, end_date: datetime,
 
             # Write week-over-week assessment after data
             _time.sleep(2)  # Pause before assessment reads
-            print(f"  [ASSESSMENT] Writing week comparison for '{matched_ws.title}'...")
-            write_week_assessment(matched_ws, header_row, column_mapping)
+            print(f"  [ASSESSMENT] Writing week comparison for '{matched_ws.title}' | date_row={date_row} header_row={header_row}")
+            write_week_assessment(matched_ws, header_row, column_mapping, current_row=date_row)
             _time.sleep(2)  # Pause after assessment writes
 
         # Pause before summary to let API quota recover

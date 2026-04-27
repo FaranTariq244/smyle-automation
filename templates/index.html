@@ -1924,6 +1924,10 @@
                             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
                             Column Mappings
                         </button>
+                        <button class="settings-tab" onclick="showSettingsTab('apikeys')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                            API Keys
+                        </button>
                         <button class="settings-tab" onclick="showSettingsTab('maintenance')">
                             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                             Maintenance
@@ -2142,7 +2146,35 @@
                         </div>
                     </div>
 
-                    <!-- Tab 4: Maintenance -->
+                    <!-- Tab 4: API Keys -->
+                    <div class="settings-tab-panel" id="settings-panel-apikeys">
+                        <div class="card-subtitle" style="margin-bottom:16px;">Third-party API keys stored locally in config.db. Values are hidden once saved.</div>
+
+                        <div class="form-group" style="margin-top: 16px;">
+                            <label class="form-label">KLAVIYO_API_KEY</label>
+                            <div class="setting-input-wrapper">
+                                <input type="password" id="setting-klaviyo-key" class="form-input" readonly placeholder="pk_xxxxxxxxxxxxxxxx (read-only private key)">
+                                <button class="setting-btn" title="Show / Hide" onclick="toggleApiKeyVisibility('setting-klaviyo-key', this)">
+                                    <svg class="eye-icon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                </button>
+                                <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleApiKeyEdit('setting-klaviyo-key', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </button>
+                            </div>
+                            <p style="font-size:12px; color:var(--text-muted); margin-top:6px;">
+                                Klaviyo private API key for email metrics. Once saved the value is masked and cannot be viewed — only replaced.
+                            </p>
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <div class="btn-group">
+                            <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
+                            <button class="btn btn-secondary" onclick="loadApiKeys()">Reload</button>
+                        </div>
+                    </div>
+
+                    <!-- Tab 5: Maintenance -->
                     <div class="settings-tab-panel" id="settings-panel-maintenance">
                         <div class="card-subtitle" style="margin-bottom:16px;">Log retention and cleanup settings</div>
 
@@ -2793,6 +2825,7 @@
                 if (tabName === 'sheets') loadSettings();
                 else if (tabName === 'availability') loadReportAvailability();
                 else if (tabName === 'mappings') loadMappings();
+                else if (tabName === 'apikeys') loadApiKeys();
                 else if (tabName === 'maintenance') loadLogSettings();
             }
         }
@@ -2875,6 +2908,70 @@
                 btn.classList.add('editing');
             } else {
                 input.readOnly = true;
+                btn.classList.remove('editing');
+            }
+        }
+
+        // --- API Keys ---
+        async function loadApiKeys() {
+            try {
+                const res = await fetch('/api/api-keys');
+                const data = await res.json();
+                const el = document.getElementById('setting-klaviyo-key');
+                el.value = data.KLAVIYO_API_KEY || '';
+                el.readOnly = true;
+                el.type = 'password';
+                // Reset edit buttons
+                document.querySelectorAll('#settings-panel-apikeys .setting-edit-btn').forEach(b => b.classList.remove('editing'));
+            } catch (error) {
+                showToast('Failed to load API keys', 'error');
+            }
+        }
+
+        async function saveApiKeys() {
+            const el = document.getElementById('setting-klaviyo-key');
+            const val = el.value.trim();
+            // Don't send masked values back
+            if (!val || val.includes('••')) {
+                showToast('No changes to save', 'info');
+                return;
+            }
+            try {
+                const response = await fetch('/api/api-keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ KLAVIYO_API_KEY: val })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    loadApiKeys(); // reload to show masked value
+                } else {
+                    showToast(data.error || 'Failed to save', 'error');
+                }
+            } catch (error) {
+                showToast('Failed to save API keys', 'error');
+            }
+        }
+
+        function toggleApiKeyVisibility(inputId, btn) {
+            const input = document.getElementById(inputId);
+            input.type = input.type === 'password' ? 'text' : 'password';
+        }
+
+        function toggleApiKeyEdit(inputId, btn) {
+            const input = document.getElementById(inputId);
+            if (input.readOnly) {
+                // Enter edit mode — clear masked placeholder so user can type fresh key
+                input.readOnly = false;
+                input.type = 'text';
+                if (input.value.includes('••')) input.value = '';
+                input.placeholder = 'Paste your new API key here';
+                input.focus();
+                btn.classList.add('editing');
+            } else {
+                input.readOnly = true;
+                input.type = 'password';
                 btn.classList.remove('editing');
             }
         }

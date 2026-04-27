@@ -65,6 +65,11 @@ SETTINGS_KEYS = [
     "SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL",
 ]
 
+# API keys stored with a "secret:" prefix so GET never returns the raw value
+API_KEY_SETTINGS = [
+    "KLAVIYO_API_KEY",
+]
+
 DEFAULT_MAX_LOG_FILES = 100
 
 
@@ -436,6 +441,40 @@ def save_settings_api():
     payload = {key: data.get(key, "").strip() for key in SETTINGS_KEYS}
     set_settings(payload)
     return jsonify({'success': True, 'message': 'Settings saved'})
+
+
+@app.route('/api/api-keys', methods=['GET'])
+def get_api_keys():
+    """Return API key status (set / not set) — never exposes the actual value."""
+    result = {}
+    for key in API_KEY_SETTINGS:
+        val = get_setting(key)
+        if val:
+            # Show masked hint: first 3 chars + dots + last 3 chars
+            if len(val) > 8:
+                result[key] = val[:3] + "••••••" + val[-3:]
+            else:
+                result[key] = "••••••"
+        else:
+            result[key] = ""
+    return jsonify(result)
+
+
+@app.route('/api/api-keys', methods=['POST'])
+def save_api_keys():
+    """Save API keys. Only overwrites a key if the value is non-empty and not masked."""
+    data = request.json
+    saved = []
+    for key in API_KEY_SETTINGS:
+        val = (data.get(key) or "").strip()
+        # Skip if empty or still the masked placeholder
+        if not val or "••" in val:
+            continue
+        set_setting(key, val)
+        saved.append(key)
+    if saved:
+        return jsonify({'success': True, 'message': f'Saved: {", ".join(saved)}'})
+    return jsonify({'success': True, 'message': 'No changes'})
 
 
 @app.route('/api/disabled-reports', methods=['GET'])

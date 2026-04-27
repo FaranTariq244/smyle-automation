@@ -17,6 +17,7 @@ Phase 5b: Netherlands+Belgium, Google Ads -> GOOGLE NL/BE.
 Phase 6: Germany + Austria + Switzerland -> META DE/AU/SW, GOOGLE DE/AU/SW.
 Phase 7: all countries EXCEPT NL, UK, DE, BE, CH, AT (Rest-of-Europe) -> REO, GOOGLE REO.
 Phase 8: United Kingdom -> META UK, GOOGLE UK.
+Phase 9: Klaviyo email metrics -> EMAIL section.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from services.bigquery.smyle_online_strategy_rn_fc1_weekly_extractor import (
     extract_marketing_kpis_bq,
     extract_weekly_totals_bq,
 )
+from services.klaviyo.extractor import extract_all_email_metrics
 
 
 # Scraper metric key -> WEEKLY sheet row label for the META (Facebook-all) section.
@@ -95,6 +97,22 @@ _GOOGLE_COUNTRY_METRIC_TO_ROW = {
     "clicks": "clicks",
     "ctr": "CTR",
     "orders": "ORDERS",
+}
+
+# Klaviyo extractor key -> WEEKLY sheet row label for the EMAIL section.
+# deliverability_score is always None (not available via public API);
+# it is excluded here so it never triggers a sheet write attempt.
+_EMAIL_METRIC_TO_ROW = {
+    "email_turnover":      "Email turnover",
+    "pct_flows":           "% flows",
+    "pct_campaigns":       "% campaigns",
+    "list_growth_rate":    "Listgrowth rate",
+    "list_size":           "List size",
+    "open_rate":           "Open rate",
+    "click_rate":          "Click rate",
+    "unsub_rate":          "Unsub rate",
+    "spam_complaint_rate": "Spam complaint",
+    "placed_order_rate":   "Placed order rate",
 }
 
 
@@ -755,6 +773,72 @@ def run_smyle_online_strategy_rn_fc1_weekly_report(
         countries="United Kingdom",
     ):
         return False
+
+    # ---------------- Phase 9: Klaviyo EMAIL section ----------------
+    print("\n[Phase 9] Extracting Klaviyo email metrics ...")
+
+    email_section_row = find_section_row(
+        worksheet, "EMAIL", after_row=week_header_row
+    )
+    if email_section_row is None:
+        print("  [ERROR] Could not find 'EMAIL' section header in column A.")
+        return False
+
+    # Read previous week's list size from the sheet for growth rate calculation.
+    prev_list_size = None
+    if column_index > 1:
+        list_size_rows = find_label_rows(
+            worksheet, ["List size"], start_row=email_section_row
+        )
+        ls_row = list_size_rows.get("List size")
+        if ls_row:
+            prev_col_letter = col_index_to_letter(column_index - 1)
+            prev_cell = worksheet.acell(f"{prev_col_letter}{ls_row}").value
+            if prev_cell:
+                try:
+                    prev_list_size = int(str(prev_cell).replace(",", "").replace(".", "").strip())
+                    print(f"  Previous list size from sheet ({prev_col_letter}{ls_row}): {prev_list_size:,}")
+                except ValueError:
+                    pass
+
+    try:
+        email_metrics = extract_all_email_metrics(
+            start_date_obj, end_date_obj,
+            previous_list_size=prev_list_size,
+        )
+    except Exception as exc:
+        print(f"  [ERROR] Klaviyo extraction failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    for k, v in email_metrics.items():
+        print(f"  Klaviyo -> {k:<22} = {v!r}")
+
+    email_writes = {
+        sheet_label: email_metrics[metric_key]
+        for metric_key, sheet_label in _EMAIL_METRIC_TO_ROW.items()
+        if email_metrics.get(metric_key) is not None
+    }
+
+    try:
+        written_email = write_weekly_totals(
+            worksheet,
+            column_index=column_index,
+            values=email_writes,
+            week_header_row=email_section_row,
+        )
+    except Exception as exc:
+        print(f"  [ERROR] Sheet write (EMAIL) failed: {exc}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+    if not written_email:
+        print("  [WARN] Nothing written - EMAIL section returned no values.")
+    else:
+        for label, info in written_email.items():
+            print(f"  [OK] Wrote {label:<22} {info['value']} -> {info['a1']}")
 
     print("\n[OK] Weekly report done.\n")
     return True

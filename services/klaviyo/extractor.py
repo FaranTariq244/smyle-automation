@@ -22,8 +22,7 @@ Week-specific metrics (use report start_date / end_date):
                      API: (end_size / start_size − 1) × 100
 
 ────────────────────────────────────────────────────────────────────────
-30-day metrics (always last 30 days regardless of week — user decision):
-  NOTE: uses rolling 30-day window ending at run time, not report week dates.
+Selected-period metrics (use report start_date / end_date):
 
   Open rate        → Analytics > Deliverability > Score tab
                      API: unique Opened Email (non-Apple) / Received Email
@@ -42,11 +41,11 @@ Week-specific metrics (use report start_date / end_date):
                      API: Marked Email as Spam / Received Email
                      Accuracy: ~0.016% off UI (same proprietary weighting limitation)
 
-  Deliverability   → Analytics > Deliverability > Score tab (always 30-day, no custom date)
+  Deliverability   → Analytics > Deliverability > Score tab
   score              API: NOT AVAILABLE via public API — returns None (enter manually)
 
-  Placed order     → Campaigns > "Email performance last 30 days" header
-  rate               API: campaign-values-reports last 30 days, weighted conversion_rate
+  Placed order     → Campaigns > "Email performance" header
+  rate               API: campaign-values-reports for selected period, weighted conversion_rate
                      Accuracy: ~0.01% off UI (essentially exact)
 
 ────────────────────────────────────────────────────────────────────────
@@ -304,12 +303,14 @@ def extract_subscriber_growth(
     }
 
 
-def extract_deliverability_metrics(days: int = 30) -> Dict[str, object]:
+def extract_deliverability_metrics(
+    start_date: datetime,
+    end_date: datetime,
+) -> Dict[str, object]:
     """
     Open rate, click rate, unsub rate, spam complaint rate.
 
     Source: Analytics > Deliverability > Score tab
-    NOTE: Uses last {days} days rolling window (user decision — not week-specific).
 
     Accuracy vs Klaviyo Score page:
       open_rate   : ~0.9% off  (Apple MPP opens excluded via inbox provider grouping)
@@ -319,8 +320,8 @@ def extract_deliverability_metrics(days: int = 30) -> Dict[str, object]:
 
     Returns rates as percentage strings ("54.40%") for Google Sheets USER_ENTERED.
     """
-    end   = datetime.now()
-    start = end - timedelta(days=days)
+    start = start_date
+    end   = end_date + timedelta(days=1)
 
     # Denominator: all received emails
     received_attr = _agg(_RECEIVED_EMAIL, ["count"], start, end)
@@ -350,16 +351,19 @@ def extract_deliverability_metrics(days: int = 30) -> Dict[str, object]:
     }
 
 
-def extract_placed_order_rate(days: int = 30) -> Optional[str]:
+def extract_placed_order_rate(
+    start_date: datetime,
+    end_date: datetime,
+) -> Optional[str]:
     """
-    Campaign placed order rate (last {days} days).
+    Campaign placed order rate for the given period.
 
-    Source: Campaigns page > "Email performance last 30 days" header.
+    Source: Campaigns page > "Email performance" header.
     Accuracy: ~0.01% off UI (essentially exact).
     Returns rate as percentage string ("0.15%") or None.
     """
-    end   = datetime.now()
-    start = end - timedelta(days=days)
+    start = start_date
+    end   = end_date + timedelta(days=1)
 
     rows = _paginate_campaign_report(start, end, ["delivered", "conversions"])
 
@@ -400,11 +404,11 @@ def extract_all_email_metrics(
     print(f"[Klaviyo] Subscriber growth ...")
     growth = extract_subscriber_growth(start_date, end_date, previous_list_size)
 
-    print(f"[Klaviyo] Deliverability metrics (last 30 days) ...")
-    deliverability = extract_deliverability_metrics(days=30)
+    print(f"[Klaviyo] Deliverability metrics for {start_date:%Y-%m-%d} to {end_date:%Y-%m-%d} ...")
+    deliverability = extract_deliverability_metrics(start_date, end_date)
 
-    print(f"[Klaviyo] Placed order rate (last 30 days) ...")
-    placed_order_rate = extract_placed_order_rate(days=30)
+    print(f"[Klaviyo] Placed order rate for {start_date:%Y-%m-%d} to {end_date:%Y-%m-%d} ...")
+    placed_order_rate = extract_placed_order_rate(start_date, end_date)
 
     return {
         # Week-specific
@@ -413,7 +417,7 @@ def extract_all_email_metrics(
         "pct_campaigns":        revenue["pct_campaigns"],
         "list_size":            growth["list_size"],
         "list_growth_rate":     growth["list_growth_rate"],
-        # 30-day rolling (noted in sheet as such)
+        # Selected period
         "open_rate":            deliverability["open_rate"],
         "click_rate":           deliverability["click_rate"],
         "unsub_rate":           deliverability["unsub_rate"],

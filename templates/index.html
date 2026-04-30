@@ -1085,6 +1085,22 @@
             color: var(--danger);
             border-color: var(--danger);
         }
+        .mapping-formula-check {
+            display: flex;
+            align-items: center;
+            flex-shrink: 0;
+            min-width: 28px;
+        }
+        .mapping-formula-check input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .mapping-row .mapping-input.formula-active {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
 
         /* ── Run Logs ── */
         .log-filters {
@@ -2100,6 +2116,7 @@
                         <!-- Column headers -->
                         <div style="display:flex; align-items:center; gap:8px; padding:4px 0 6px; border-bottom:1px solid var(--border); margin-bottom:2px;">
                             <div style="min-width:20px;"></div>
+                            <div style="min-width:28px; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px; color:var(--text-muted); text-align:center;" title="Check to make this a formula field (computed from two source fields)">Fx</div>
                             <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Source Field</div>
                             <div style="width:24px;"></div>
                             <div style="flex:1; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Sheet Column</div>
@@ -2775,7 +2792,7 @@
             if (!text) return '';
             const div = document.createElement('div');
             div.textContent = text;
-            return div.innerHTML;
+            return div.innerHTML.replace(/"/g, '&quot;');
         }
 
         async function toggleSchedule(id, enabled) {
@@ -3193,10 +3210,28 @@
             const mappings = getMappings();
             const len = mappings.length;
 
-            container.innerHTML = mappings.map((m, i) => `
+            container.innerHTML = mappings.map((m, i) => {
+                const isFormula = !!m.is_formula;
+                let srcValue;
+                if (isFormula) {
+                    srcValue = `"${m.formula_field1 || ''}"${m.formula_operator || '/'}"${m.formula_field2 || ''}"`;
+                    if (m.formula_modifier_op && m.formula_modifier_value != null) {
+                        srcValue += `${m.formula_modifier_op}${m.formula_modifier_value}`;
+                    }
+                } else {
+                    srcValue = m.datads_field;
+                }
+                const srcPlaceholder = isFormula
+                    ? '"Field 1"/"Field 2"*100'
+                    : 'Source field name';
+
+                return `
                 <div class="mapping-row" data-idx="${i}">
                     <span class="mapping-num">${i + 1}</span>
-                    <input class="mapping-input mapping-src" value="${escapeHtml(m.datads_field)}" placeholder="Source field name" />
+                    <div class="mapping-formula-check">
+                        <input type="checkbox" title="Formula field" ${isFormula ? 'checked' : ''} onchange="toggleFormulaRow(${i}, this.checked)" />
+                    </div>
+                    <input class="mapping-input mapping-src ${isFormula ? 'formula-active' : ''}" value="${escapeHtml(srcValue)}" placeholder="${srcPlaceholder}" />
                     <span class="mapping-arrow">&rarr;</span>
                     <input class="mapping-input mapping-col" value="${escapeHtml(m.sheet_column)}" placeholder="Sheet column name" />
                     <div class="mapping-row-actions">
@@ -3204,8 +3239,8 @@
                         <button title="Move down" onclick="moveMappingRow(${i}, 1)" ${i === len - 1 ? 'disabled style="opacity:0.3"' : ''}>&#9660;</button>
                         <button class="mapping-del" title="Remove" onclick="removeMappingRow(${i})">&#10005;</button>
                     </div>
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
 
             const isWeekly = currentMappingTab === 'weekly';
             document.getElementById('btn-copy-to-weekly').style.display = isWeekly ? '' : 'none';
@@ -3219,14 +3254,59 @@
             renderMappingTable();
         }
 
+        // Parse formula string like "Field 1"/"Field 2" or "Field 1"/"Field 2"*100
+        function parseFormulaString(str) {
+            const match = str.match(/^"(.+?)"([\/\*\+\-])"(.+?)"(?:([\/\*\+\-])(\d+(?:\.\d+)?))?$/);
+            if (match) {
+                const result = { field1: match[1], operator: match[2], field2: match[3] };
+                if (match[4] && match[5]) {
+                    result.modifier_op = match[4];
+                    result.modifier_value = parseFloat(match[5]);
+                }
+                return result;
+            }
+            return null;
+        }
+
         function collectMappingsFromUI() {
             const rows = document.querySelectorAll('#mapping-rows-container .mapping-row');
             const mappings = [];
             rows.forEach(row => {
+                const isFormula = row.querySelector('.mapping-formula-check input[type="checkbox"]').checked;
                 const src = row.querySelector('.mapping-src').value.trim();
                 const col = row.querySelector('.mapping-col').value.trim();
-                if (src || col) {
-                    mappings.push({ datads_field: src, sheet_column: col || src });
+
+                if (isFormula) {
+                    const parsed = parseFormulaString(src);
+                    if (parsed) {
+                        const entry = {
+                            datads_field: '',
+                            sheet_column: col || src,
+                            is_formula: true,
+                            formula_field1: parsed.field1,
+                            formula_field2: parsed.field2,
+                            formula_operator: parsed.operator
+                        };
+                        if (parsed.modifier_op) {
+                            entry.formula_modifier_op = parsed.modifier_op;
+                            entry.formula_modifier_value = parsed.modifier_value;
+                        }
+                        mappings.push(entry);
+                    } else if (src || col) {
+                        // User hasn't formatted yet, store raw
+                        mappings.push({
+                            datads_field: '',
+                            sheet_column: col || src,
+                            is_formula: true,
+                            formula_field1: src,
+                            formula_field2: '',
+                            formula_operator: '/'
+                        });
+                    }
+                } else {
+                    if (src || col) {
+                        mappings.push({ datads_field: src, sheet_column: col || src });
+                    }
                 }
             });
             return mappings;
@@ -3241,6 +3321,31 @@
             // Focus the new source input
             const inputs = document.querySelectorAll('#mapping-rows-container .mapping-src');
             if (inputs.length) inputs[inputs.length - 1].focus();
+        }
+
+        function toggleFormulaRow(idx, checked) {
+            const current = collectMappingsFromUI();
+            if (idx < current.length) {
+                const m = current[idx];
+                if (checked) {
+                    // Convert to formula — wrap existing field name as first operand
+                    const fieldName = m.datads_field || '';
+                    m.is_formula = true;
+                    m.formula_field1 = fieldName;
+                    m.formula_field2 = '';
+                    m.formula_operator = '/';
+                    m.datads_field = '';
+                } else {
+                    // Convert back — use first operand as field name
+                    m.datads_field = m.formula_field1 || '';
+                    delete m.is_formula;
+                    delete m.formula_field1;
+                    delete m.formula_field2;
+                    delete m.formula_operator;
+                }
+                setMappings(current);
+                renderMappingTable();
+            }
         }
 
         function removeMappingRow(idx) {
@@ -3268,7 +3373,7 @@
         }
 
         async function saveMappings() {
-            const mappings = collectMappingsFromUI().filter(m => m.datads_field && m.sheet_column);
+            const mappings = collectMappingsFromUI().filter(m => (m.datads_field || m.is_formula) && m.sheet_column);
             if (mappings.length === 0) {
                 showToast('Add at least one mapping', 'error');
                 return;

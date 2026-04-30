@@ -31,12 +31,26 @@ SCOPES = [
 class ColumnMapping:
     """Represents a mapping from a DataAds field to a Google Sheet column."""
 
-    def __init__(self, datads_field: str, sheet_column: str):
+    def __init__(self, datads_field: str, sheet_column: str,
+                 is_formula: bool = False, formula_field1: str = '',
+                 formula_field2: str = '', formula_operator: str = '/',
+                 formula_modifier_op: str = '', formula_modifier_value: float = None):
         self.datads_field = datads_field
         self.sheet_column = sheet_column
         self.sheet_column_lower = sheet_column.lower()
+        self.is_formula = is_formula
+        self.formula_field1 = formula_field1
+        self.formula_field2 = formula_field2
+        self.formula_operator = formula_operator
+        self.formula_modifier_op = formula_modifier_op
+        self.formula_modifier_value = formula_modifier_value
 
     def __repr__(self):
+        if self.is_formula:
+            expr = f'"{self.formula_field1}"{self.formula_operator}"{self.formula_field2}"'
+            if self.formula_modifier_op and self.formula_modifier_value is not None:
+                expr += f'{self.formula_modifier_op}{self.formula_modifier_value}'
+            return f"ColumnMapping({expr} -> '{self.sheet_column}')"
         return f"ColumnMapping('{self.datads_field}' -> '{self.sheet_column}')"
 
 
@@ -88,7 +102,19 @@ def get_column_mappings(mode: str = 'daily') -> List[dict]:
 def get_column_mapping_objects(mode: str = 'daily') -> List[ColumnMapping]:
     """Get column mappings as ColumnMapping objects for the given mode."""
     raw_mappings = get_column_mappings(mode)
-    return [ColumnMapping(m["datads_field"], m["sheet_column"]) for m in raw_mappings]
+    result = []
+    for m in raw_mappings:
+        result.append(ColumnMapping(
+            datads_field=m.get("datads_field", ""),
+            sheet_column=m["sheet_column"],
+            is_formula=m.get("is_formula", False),
+            formula_field1=m.get("formula_field1", ""),
+            formula_field2=m.get("formula_field2", ""),
+            formula_operator=m.get("formula_operator", "/"),
+            formula_modifier_op=m.get("formula_modifier_op", ""),
+            formula_modifier_value=m.get("formula_modifier_value"),
+        ))
+    return result
 
 
 def get_sheet_headers(mode: str = 'daily') -> List[str]:
@@ -114,7 +140,10 @@ def print_column_mappings(mode: str = 'daily'):
     print(f"\n[MAPPING] Configured column mappings ({mode}):")
     print("-" * 50)
     for mapping in mappings:
-        print(f"  DataAds: '{mapping.datads_field}' -> Sheet: '{mapping.sheet_column}'")
+        if mapping.is_formula:
+            print(f"  Formula: '{mapping.formula_field1} {mapping.formula_operator} {mapping.formula_field2}' -> Sheet: '{mapping.sheet_column}'")
+        else:
+            print(f"  DataAds: '{mapping.datads_field}' -> Sheet: '{mapping.sheet_column}'")
     print("-" * 50)
 
 
@@ -636,10 +665,44 @@ def map_datads_to_sheet_columns(datads_row: Dict, sheet_column_mapping: Dict[str
     result = {}
     mappings = get_column_mapping_objects(mode)
     for mapping in mappings:
-        if mapping.datads_field in datads_row:
-            value = datads_row[mapping.datads_field]
-            if mapping.sheet_column_lower in sheet_column_mapping:
-                col_index = sheet_column_mapping[mapping.sheet_column_lower]
+        if mapping.sheet_column_lower not in sheet_column_mapping:
+            continue
+        col_index = sheet_column_mapping[mapping.sheet_column_lower]
+
+        if mapping.is_formula:
+            # Compute value from two source fields using the operator
+            f1 = mapping.formula_field1
+            f2 = mapping.formula_field2
+            if f1 in datads_row and f2 in datads_row:
+                v1 = parse_value(datads_row[f1])
+                v2 = parse_value(datads_row[f2])
+                op = mapping.formula_operator
+                val = None
+                if op == '/' and v2 != 0:
+                    val = v1 / v2
+                elif op == '*':
+                    val = v1 * v2
+                elif op == '+':
+                    val = v1 + v2
+                elif op == '-':
+                    val = v1 - v2
+                # Apply modifier (e.g. *100) if present
+                if val is not None and mapping.formula_modifier_op and mapping.formula_modifier_value is not None:
+                    mod_op = mapping.formula_modifier_op
+                    mod_val = mapping.formula_modifier_value
+                    if mod_op == '*':
+                        val = val * mod_val
+                    elif mod_op == '/':
+                        val = val / mod_val if mod_val != 0 else val
+                    elif mod_op == '+':
+                        val = val + mod_val
+                    elif mod_op == '-':
+                        val = val - mod_val
+                if val is not None:
+                    result[col_index] = round(val, 2)
+        else:
+            if mapping.datads_field in datads_row:
+                value = datads_row[mapping.datads_field]
                 result[col_index] = parse_value(value)
     return result
 
@@ -798,10 +861,11 @@ def write_datads_data_to_sheets(date_obj: datetime, datads_data: List[Dict]):
             print(f"  {'DataAds Field':<30} | {'Sheet Column':<20} | {'Value':<15}")
             print(f"  " + "-" * 60)
             for mapping in get_column_mapping_objects(_mode):
-                if mapping.datads_field in datads_row and mapping.sheet_column_lower in column_mapping:
+                if mapping.sheet_column_lower in column_mapping:
                     col_idx = column_mapping[mapping.sheet_column_lower]
                     if col_idx in column_data:
-                        print(f"  {mapping.datads_field:<30} | {mapping.sheet_column:<20} | {column_data[col_idx]}")
+                        label = f"{mapping.formula_field1} {mapping.formula_operator} {mapping.formula_field2}" if mapping.is_formula else mapping.datads_field
+                        print(f"  {label:<30} | {mapping.sheet_column:<20} | {column_data[col_idx]}")
             print(f"  " + "-" * 60)
 
             # Write data
@@ -1255,8 +1319,41 @@ def write_summary_section(worksheet, start_date: datetime, end_date: datetime,
             lp = datads_row.get('Landing page', '')
             row_values = [lp]
             for mapping in mappings:
-                raw_val = datads_row.get(mapping.datads_field, '')
-                row_values.append(parse_value(raw_val) if raw_val else '')
+                if mapping.is_formula:
+                    f1 = mapping.formula_field1
+                    f2 = mapping.formula_field2
+                    v1_raw = datads_row.get(f1, '')
+                    v2_raw = datads_row.get(f2, '')
+                    if v1_raw and v2_raw:
+                        v1 = parse_value(v1_raw)
+                        v2 = parse_value(v2_raw)
+                        op = mapping.formula_operator
+                        val = None
+                        if op == '/' and v2 != 0:
+                            val = v1 / v2
+                        elif op == '*':
+                            val = v1 * v2
+                        elif op == '+':
+                            val = v1 + v2
+                        elif op == '-':
+                            val = v1 - v2
+                        if val is not None and mapping.formula_modifier_op and mapping.formula_modifier_value is not None:
+                            mod_op = mapping.formula_modifier_op
+                            mod_val = mapping.formula_modifier_value
+                            if mod_op == '*':
+                                val = val * mod_val
+                            elif mod_op == '/':
+                                val = val / mod_val if mod_val != 0 else val
+                            elif mod_op == '+':
+                                val = val + mod_val
+                            elif mod_op == '-':
+                                val = val - mod_val
+                        row_values.append(round(val, 2) if val is not None else '')
+                    else:
+                        row_values.append('')
+                else:
+                    raw_val = datads_row.get(mapping.datads_field, '')
+                    row_values.append(parse_value(raw_val) if raw_val else '')
             section_rows.append(row_values)
         # Empty separator row after each category
         section_rows.append([''])

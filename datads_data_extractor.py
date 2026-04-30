@@ -7,7 +7,6 @@ Uses UI-based date selection (date picker) instead of URL parameters.
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.action_chains import ActionChains
 import time
 import re
 from datetime import datetime
@@ -293,323 +292,176 @@ class DataAdsDataExtractor:
             if not self._is_calendar_open():
                 raise Exception("Date picker calendar did not open after clicking")
 
+    # JavaScript to click a day using <time datetime="YYYY-M-D"> elements.
+    # The calendar uses 0-indexed months in datetime attrs (JS-style: 0=Jan, 11=Dec).
+    # We also filter by X-position to ensure we click in the correct month panel,
+    # not an overflow day from an adjacent month.
+    _JS_CLICK_DAY = """
+    var year = arguments[0];
+    var jsMonth = arguments[1];
+    var day = arguments[2];
+    var targetMonthHeader = arguments[3];
+    var dateAttr = year + '-' + jsMonth + '-' + day;
+
+    var monthHeaders = [];
+    document.querySelectorAll('h2').forEach(function(h) {
+        var text = h.textContent.trim();
+        if (/^[A-Z][a-z]+ \\d{4}$/.test(text) && h.offsetParent !== null) {
+            var rect = h.getBoundingClientRect();
+            monthHeaders.push({text: text, centerX: rect.x + rect.width / 2});
+        }
+    });
+    monthHeaders.sort(function(a, b) { return a.centerX - b.centerX; });
+
+    var targetIdx = -1;
+    for (var i = 0; i < monthHeaders.length; i++) {
+        if (monthHeaders[i].text === targetMonthHeader) { targetIdx = i; break; }
+    }
+    var xMin = 0, xMax = 99999;
+    if (targetIdx >= 0) {
+        if (targetIdx > 0)
+            xMin = (monthHeaders[targetIdx - 1].centerX + monthHeaders[targetIdx].centerX) / 2;
+        if (targetIdx + 1 < monthHeaders.length)
+            xMax = (monthHeaders[targetIdx].centerX + monthHeaders[targetIdx + 1].centerX) / 2;
+    }
+
+    var allMatches = [];
+    document.querySelectorAll('time[datetime="' + dateAttr + '"]').forEach(function(t) {
+        if (t.offsetParent !== null) {
+            var btn = t.closest('button') || t.parentElement;
+            var rect = btn.getBoundingClientRect();
+            allMatches.push({element: btn, centerX: rect.x + rect.width / 2});
+        }
+    });
+
+    if (allMatches.length === 0) {
+        var allTimes = [];
+        document.querySelectorAll('time[datetime]').forEach(function(t) {
+            if (t.offsetParent !== null) allTimes.push(t.getAttribute('datetime'));
+        });
+        return {error: 'No <time> for ' + dateAttr, visibleDates: allTimes.slice(0, 20)};
+    }
+
+    var inRange = allMatches.filter(function(m) { return m.centerX >= xMin && m.centerX <= xMax; });
+    if (inRange.length === 0 && targetIdx >= 0) {
+        var tgtX = monthHeaders[targetIdx].centerX;
+        inRange = [allMatches[0]];
+        for (var m of allMatches) {
+            if (Math.abs(m.centerX - tgtX) < Math.abs(inRange[0].centerX - tgtX)) inRange = [m];
+        }
+    }
+    if (inRange.length === 0) inRange = allMatches;
+
+    inRange[0].element.click();
+    return {success: true, clicked: dateAttr, totalMatches: allMatches.length, inRange: inRange.length};
+    """
+
     def _navigate_and_click_date(self, target_date):
-        """Navigate the calendar to the correct month and click the target day."""
+        """Navigate the calendar to the correct month and click the target day via JS."""
         target_month_name = self.MONTH_FULL[target_date.month]
         target_year = target_date.year
         target_header = f"{target_month_name} {target_year}"
 
         print(f"[DATE] Looking for month '{target_header}' to click day {target_date.day}")
 
-        # Check if target month is already visible in the calendar
-        max_nav_clicks = 24  # Safety limit
+        # Navigate to the correct month
+        max_nav_clicks = 24
         for i in range(max_nav_clicks):
-            # Find visible month headers matching target
-            headers = self.driver.find_elements(
-                By.XPATH,
-                f"//*[normalize-space(text())='{target_header}']"
-            )
-            visible_headers = [h for h in headers if h.is_displayed()]
+            visible = self._get_visible_month_headers()
+            if target_header in visible:
+                break
 
-            if not visible_headers:
-                # Also try partial match
-                headers = self.driver.find_elements(
-                    By.XPATH,
-                    f"//*[contains(text(), '{target_month_name}') and contains(text(), '{target_year}')]"
-                )
-                visible_headers = [h for h in headers if h.is_displayed() and len(h.text.strip()) < 30]
-
-            if visible_headers:
-                # Target month is visible — find the day cell in the correct month panel
-                self._click_day_in_month(target_date, visible_headers[0])
-                return
-
-            # Need to navigate — determine direction
-            current_headers = self._get_visible_month_headers()
-            if not current_headers:
-                if i == 0:
-                    print(f"[DATE] Warning: No month headers visible — calendar may not be open")
-                    # Try to verify calendar is open
-                    if not self._is_calendar_open():
-                        raise Exception("Calendar is not open — cannot navigate months")
-                print(f"[DATE] Warning: No month headers visible, clicking next anyway")
+            if not visible:
+                if i == 0 and not self._is_calendar_open():
+                    raise Exception("Calendar is not open — cannot navigate months")
                 self._click_calendar_nav("next")
                 time.sleep(0.5)
                 continue
 
-            first_visible = current_headers[0]
-            direction = "prev" if self._month_before(target_year, target_date.month, first_visible) else "next"
-            print(f"[DATE] Visible months: {current_headers}, need '{target_header}' — clicking {direction}")
-            nav_success = self._click_calendar_nav(direction)
-            if not nav_success:
-                print(f"[DATE] Navigation button click may have failed, retrying...")
-                time.sleep(0.5)
-                nav_success = self._click_calendar_nav(direction)
-            time.sleep(1)
+            # Determine direction from first visible header
+            first = visible[0]
+            match = re.match(r'^(\w+)\s+(\d{4})$', first)
+            if match:
+                vis_month = self.MONTH_FULL.index(match.group(1))
+                vis_year = int(match.group(2))
+                direction = "prev" if (target_year, target_date.month) < (vis_year, vis_month) else "next"
+            else:
+                direction = "next"
 
-        raise Exception(f"Could not navigate calendar to {target_header}")
+            print(f"[DATE] Visible: {visible}, need '{target_header}' — clicking {direction}")
+            if not self._click_calendar_nav(direction):
+                time.sleep(0.5)
+                self._click_calendar_nav(direction)
+            time.sleep(1)
+        else:
+            raise Exception(f"Could not navigate calendar to {target_header}")
+
+        # Click the day using JS with <time datetime> and X-position filtering.
+        # The datetime attribute uses 0-indexed months (JS-style), so subtract 1.
+        js_month = target_date.month - 1
+        result = self.driver.execute_script(
+            self._JS_CLICK_DAY, target_year, js_month, target_date.day, target_header
+        )
+
+        if result and result.get('success'):
+            print(f"[DATE] Clicked day {target_date.day}")
+        else:
+            raise Exception(f"Could not click day {target_date.day}: {result}")
 
     def _get_visible_month_headers(self):
-        """Get visible month/year headers from the calendar. Returns list of (year, month) tuples."""
-        results = []
-
-        # Strategy 1: Find calendar caption/header elements by common CSS classes
-        # This is much faster than brute-forcing all month/year combinations
-        caption_selectors = [
-            # datads.io uses h2 with Tailwind classes for month headers
-            "h2.text-sm.font-semibold",
-            "[class*='caption'] [class*='label']",
-            "[class*='rdp-caption']",
-            "[class*='month_caption']",
-            "[class*='calendar-title']",
-            "[class*='month-title']",
-            "h2[class*='month']",
-        ]
-        for sel in caption_selectors:
-            try:
-                elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in elements:
-                    if el.is_displayed():
-                        text = el.text.strip()
-                        match = re.match(r'^(\w+)\s+(\d{4})$', text)
-                        if match:
-                            month_name = match.group(1)
-                            year = int(match.group(2))
-                            if month_name in self.MONTH_FULL[1:]:
-                                m_idx = self.MONTH_FULL.index(month_name)
-                                if (year, m_idx) not in results:
-                                    results.append((year, m_idx))
-            except Exception:
-                continue
-
-        if results:
-            return sorted(results)
-
-        # Strategy 2: Look for any element with class containing caption/header/month/title
-        try:
-            all_elements = self.driver.find_elements(
-                By.XPATH,
-                "//*[contains(@class, 'caption') or contains(@class, 'header') or contains(@class, 'month') or contains(@class, 'title')]"
-            )
-            for el in all_elements:
-                if el.is_displayed():
-                    text = el.text.strip()
-                    match = re.match(r'^(\w+)\s+(\d{4})$', text)
-                    if match:
-                        month_name = match.group(1)
-                        year = int(match.group(2))
-                        if month_name in self.MONTH_FULL[1:]:
-                            m_idx = self.MONTH_FULL.index(month_name)
-                            if (year, m_idx) not in results:
-                                results.append((year, m_idx))
-        except Exception:
-            pass
-
-        if results:
-            return sorted(results)
-
-        # Strategy 3 (fallback): Brute-force search for each month/year text
-        try:
-            for m_idx, m_name in enumerate(self.MONTH_FULL[1:], 1):
-                for year in range(2025, 2028):
-                    target_text = f"{m_name} {year}"
-                    headers = self.driver.find_elements(
-                        By.XPATH,
-                        f"//*[normalize-space(text())='{target_text}']"
-                    )
-                    for h in headers:
-                        if h.is_displayed():
-                            if (year, m_idx) not in results:
-                                results.append((year, m_idx))
-        except Exception:
-            pass
-
-        return sorted(results)
-
-    def _month_before(self, target_year, target_month, visible_ym):
-        """Check if target (year,month) is before visible (year,month)."""
-        vis_year, vis_month = visible_ym
-        return (target_year, target_month) < (vis_year, vis_month)
+        """Get visible month/year header texts from the calendar h2 elements."""
+        result = self.driver.execute_script("""
+            var headers = [];
+            document.querySelectorAll('h2').forEach(function(h) {
+                if (h.offsetParent !== null) {
+                    var text = h.textContent.trim();
+                    if (/^[A-Z][a-z]+ \\d{4}$/.test(text)) {
+                        headers.push(text);
+                    }
+                }
+            });
+            return headers;
+        """)
+        return result or []
 
     def _click_calendar_nav(self, direction):
         """Click the previous or next month navigation arrow. Returns True if clicked."""
+        sr_text = "Previous month" if direction == "prev" else "Next month"
+
+        # Use JS for reliability — find button with sr-only span
+        clicked = self.driver.execute_script("""
+            var srText = arguments[0];
+            var btns = document.querySelectorAll('button');
+            for (var btn of btns) {
+                var span = btn.querySelector('span.sr-only');
+                if (span && span.textContent.trim() === srText && btn.offsetParent !== null) {
+                    btn.click();
+                    return true;
+                }
+            }
+            return false;
+        """, sr_text)
+
+        if clicked:
+            return True
+
+        # Fallback strategies for other calendar implementations
         is_prev = direction == "prev"
-        sr_text = "Previous month" if is_prev else "Next month"
-
-        # Strategy 1 (datads.io specific): button containing <span class="sr-only">Previous/Next month</span>
-        # The actual datads calendar uses Tailwind with sr-only spans for accessibility
-        try:
-            buttons = self.driver.find_elements(
-                By.XPATH,
-                f"//button[.//span[contains(@class, 'sr-only') and normalize-space(text())='{sr_text}']]"
-            )
-            for btn in buttons:
-                if btn.is_displayed():
-                    try:
-                        btn.click()
-                    except Exception:
-                        ActionChains(self.driver).move_to_element(btn).click().perform()
-                    print(f"[DATE] Clicked {direction} nav (sr-only '{sr_text}' button)")
-                    return True
-        except Exception:
-            pass
-
-        # Strategy 2: buttons with left/right absolute positioning (calendar arrow pattern)
-        if is_prev:
-            css_sel = "button[class*='-left-']"
-        else:
-            css_sel = "button[class*='-right-']"
-        try:
-            arrows = self.driver.find_elements(By.CSS_SELECTOR, css_sel)
-            for a in arrows:
-                if a.is_displayed() and 'absolute' in (a.get_attribute("class") or ""):
-                    try:
-                        a.click()
-                    except Exception:
-                        ActionChains(self.driver).move_to_element(a).click().perform()
-                    print(f"[DATE] Clicked {direction} nav (absolute positioned button)")
-                    return True
-        except Exception:
-            pass
-
-        # Strategy 3: Standard aria-label and rdp patterns
-        if is_prev:
-            selectors = [
-                ("css", "button[aria-label='Go to previous month']"),
-                ("css", "button[aria-label='Go to the previous month']"),
-                ("css", "button.rdp-button_previous, button[class*='nav_button_previous']"),
-                ("xpath", "//button[contains(@class, 'prev')]"),
-                ("xpath", "//button[@aria-label='Previous']"),
-                ("css", "[class*='chevron-left'], [class*='ChevronLeft'], [class*='arrow-left']"),
-            ]
-        else:
-            selectors = [
-                ("css", "button[aria-label='Go to next month']"),
-                ("css", "button[aria-label='Go to the next month']"),
-                ("css", "button.rdp-button_next, button[class*='nav_button_next']"),
-                ("xpath", "//button[contains(@class, 'next')]"),
-                ("xpath", "//button[@aria-label='Next']"),
-                ("css", "[class*='chevron-right'], [class*='ChevronRight'], [class*='arrow-right']"),
-            ]
-
-        for method, selector in selectors:
+        selectors = [
+            f"//button[.//span[contains(@class, 'sr-only') and normalize-space(text())='{sr_text}']]",
+            "//button[contains(@class, 'prev')]" if is_prev else "//button[contains(@class, 'next')]",
+            f"//button[@aria-label='{sr_text}']",
+        ]
+        for xpath in selectors:
             try:
-                if method == "css":
-                    arrows = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                else:
-                    arrows = self.driver.find_elements(By.XPATH, selector)
-                for a in arrows:
-                    if a.is_displayed():
-                        a.click()
-                        print(f"[DATE] Clicked {direction} nav (selector: {selector})")
+                for btn in self.driver.find_elements(By.XPATH, xpath):
+                    if btn.is_displayed():
+                        btn.click()
                         return True
             except Exception:
                 continue
 
         print(f"[DATE] WARNING: Could not find {direction} navigation button!")
-        return False
-
-    def _click_day_in_month(self, target_date, month_header_el):
-        """Click the day number within the correct month panel of the calendar."""
-        day = target_date.day
-        print(f"[DATE] Clicking day {day} in {self.MONTH_FULL[target_date.month]} {target_date.year}")
-
-        # Strategy: find the calendar table/grid that is associated with this month header,
-        # then find the day button inside it.
-        # The month header and its calendar grid are usually siblings or in the same parent container.
-
-        # Try to find the parent container of the month header
-        try:
-            month_container = month_header_el.find_element(By.XPATH, "./ancestor::div[contains(@class, 'rdp-month') or contains(@class, 'calendar')]")
-        except Exception:
-            # Fallback: go up a few levels
-            try:
-                month_container = month_header_el.find_element(By.XPATH, "./..")
-            except Exception:
-                month_container = None
-
-        # Find day buttons — try within the month container first, then globally
-        day_clicked = False
-
-        if month_container:
-            day_clicked = self._try_click_day_in_container(month_container, day)
-
-        if not day_clicked:
-            # Fallback: find all visible day buttons/cells with matching text
-            day_clicked = self._try_click_day_global(target_date)
-
-        if not day_clicked:
-            raise Exception(f"Could not click day {day}")
-
-    def _try_click_day_in_container(self, container, day):
-        """Try to click a day number within a specific container element."""
-        day_str = str(day)
-        # Look for button or td elements with the day number
-        selectors = [
-            f"button[name='day']",
-            f"td button",
-            f"button",
-            f"td",
-            f"div[role='gridcell']",
-        ]
-        for sel in selectors:
-            try:
-                cells = container.find_elements(By.CSS_SELECTOR, sel)
-                for cell in cells:
-                    if cell.text.strip() == day_str and cell.is_displayed():
-                        cell.click()
-                        print(f"[DATE] Clicked day {day}")
-                        return True
-            except Exception:
-                continue
-        return False
-
-    def _try_click_day_global(self, target_date):
-        """Fallback: find and click day across the entire date picker."""
-        day_str = str(target_date.day)
-        target_month_name = self.MONTH_FULL[target_date.month]
-        target_year = str(target_date.year)
-
-        # Find all elements that could be day cells
-        selectors = [
-            "button[name='day']",
-            "td[role='gridcell'] button",
-            "div[role='gridcell'] button",
-            "td[role='gridcell']",
-        ]
-
-        for sel in selectors:
-            try:
-                cells = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                candidates = []
-                for cell in cells:
-                    if cell.text.strip() == day_str and cell.is_displayed():
-                        # Check it's not a greyed-out day from adjacent month
-                        classes = cell.get_attribute("class") or ""
-                        parent_classes = ""
-                        try:
-                            parent_classes = cell.find_element(By.XPATH, "..").get_attribute("class") or ""
-                        except Exception:
-                            pass
-                        # Skip if it looks disabled/outside
-                        if "outside" in classes or "disabled" in classes or "outside" in parent_classes:
-                            continue
-                        candidates.append(cell)
-
-                if len(candidates) == 1:
-                    candidates[0].click()
-                    print(f"[DATE] Clicked day {day_str} (global fallback, single match)")
-                    return True
-                elif len(candidates) > 1:
-                    # Multiple matches — pick the one closest to the target month header
-                    # For simplicity, try clicking each and check
-                    # Usually the first non-disabled match is correct for the left panel
-                    candidates[0].click()
-                    print(f"[DATE] Clicked day {day_str} (global fallback, first of {len(candidates)} matches)")
-                    return True
-            except Exception:
-                continue
-
         return False
 
     def _click_apply(self):

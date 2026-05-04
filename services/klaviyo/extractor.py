@@ -6,9 +6,10 @@ UI source → API mapping
 Week-specific metrics (use report start_date / end_date):
 
   Email turnover   → Home > Business performance summary > Attributed revenue (Email)
-                     API: HYBRID — campaign-values-reports (conversion_value, very accurate)
-                          + metric-aggregates $attributed_flow (flow revenue)
-                     Accuracy: ~1.5% off UI (down from 6.3% with single-method approach)
+                     API: campaign-values-reports (conversion_value)
+                          + flow-values-reports (conversion_value)
+                     Both use Reporting API with send-date attribution.
+                     Accuracy: ~2.5% off UI
 
   % flows          → same page, Flows / (Campaigns + Flows)
   % campaigns      → same page, Campaigns / (Campaigns + Flows)
@@ -64,6 +65,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Dict, Optional
+from urllib.parse import urlparse, parse_qs
 
 import requests
 
@@ -160,6 +162,47 @@ def _paginate_campaign_report(start: datetime, end: datetime, statistics: list[s
     return rows
 
 
+def _paginate_flow_report(start: datetime, end: datetime, statistics: list[str]) -> list[dict]:
+    """Fetch all pages of flow-values-reports and return all result rows.
+
+    Note: Reporting API pagination requires POST with page[cursor] param,
+    not GET on the next link (returns 405).
+    """
+    payload = {
+        "data": {
+            "type": "flow-values-report",
+            "attributes": {
+                "statistics": statistics,
+                "timeframe": {
+                    "start": start.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "end":   end.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                "conversion_metric_id": _PLACED_ORDER,
+            },
+        }
+    }
+    url = f"{_BASE_URL}/flow-values-reports"
+    resp = requests.post(url, json=payload, headers=_headers(), timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+    rows = data.get("data", {}).get("attributes", {}).get("results", [])
+    next_link = data.get("links", {}).get("next")
+    while next_link:
+        parsed = urlparse(next_link)
+        cursor = parse_qs(parsed.query).get("page[cursor]", [None])[0]
+        if not cursor:
+            break
+        resp = requests.post(
+            url, json=payload, headers=_headers(), timeout=60,
+            params={"page[cursor]": cursor},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        rows.extend(data.get("data", {}).get("attributes", {}).get("results", []))
+        next_link = data.get("links", {}).get("next")
+    return rows
+
+
 def _non_apple_unique_opens(start: datetime, end: datetime) -> float:
     """
     Return unique opens excluding Apple inbox provider (MPP auto-opens).
@@ -189,12 +232,10 @@ def extract_email_revenue(
 
     Source: Home > Business performance summary (Placed Order conversion, Email channel)
 
-    HYBRID method for best accuracy (~1.5% off UI vs 6.3% with single method):
-      - Campaign revenue: campaign-values-reports conversion_value (Reporting API)
-        → very accurate, <0.1% off UI
-      - Flow revenue: metric-aggregates Placed Order grouped by $attributed_flow
-        → ~1.8% off UI (flow emails sent before period still attributed correctly
-           since we filter by ORDER date, not send date)
+    Uses Reporting API for both campaign and flow revenue (send-date attribution,
+    matches UI). Includes all channels (email + whatsapp).
+      - Campaign revenue: campaign-values-reports conversion_value
+      - Flow revenue: flow-values-reports conversion_value
 
     Returns:
         email_turnover : float (EUR, rounded to 2dp)
@@ -203,7 +244,7 @@ def extract_email_revenue(
     """
     end_excl = end_date + timedelta(days=1)
 
-    # Campaign revenue via Reporting API (very accurate)
+    # Campaign revenue via Reporting API
     camp_rows = _paginate_campaign_report(start_date, end_excl,
                                           ["conversion_value"])
     camp_rev = sum(
@@ -211,10 +252,13 @@ def extract_email_revenue(
         for r in camp_rows
     )
 
-    # Flow revenue via metric aggregates (non-empty $attributed_flow = flow-attributed)
-    flow_attr = _agg(_PLACED_ORDER, ["sum_value"], start_date, end_excl,
-                     group_by="$attributed_flow")
-    flow_rev = _sum_dim(flow_attr, "sum_value", exclude_empty=True)
+    # Flow revenue via Reporting API
+    flow_rows = _paginate_flow_report(start_date, end_excl,
+                                      ["conversion_value"])
+    flow_rev = sum(
+        (r.get("statistics", {}).get("conversion_value") or 0)
+        for r in flow_rows
+    )
 
     email_turnover = camp_rev + flow_rev
 

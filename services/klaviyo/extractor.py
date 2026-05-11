@@ -63,13 +63,21 @@ Metric IDs (Smyle account):
 
 from __future__ import annotations
 
+import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from urllib.parse import urlparse, parse_qs
 
 import requests
 
-from services.klaviyo.client import _headers, _BASE_URL
+from services.klaviyo.client import _headers, _BASE_URL, _request_with_retry
+
+log = logging.getLogger(__name__)
+
+# Klaviyo reporting endpoints allow only 2 requests/minute (steady limit).
+# 35s gap keeps us safely under that ceiling.
+_REPORTING_PAGE_DELAY = 35
 
 # ── Metric IDs (Smyle account) ──────────────────────────────────────────────
 _PLACED_ORDER     = "TgSTnN"
@@ -106,8 +114,8 @@ def _agg(metric_id: str, measurements: list[str],
     if group_by:
         payload["data"]["attributes"]["by"] = [group_by]
 
-    resp = requests.post(
-        f"{_BASE_URL}/metric-aggregates",
+    resp = _request_with_retry(
+        "POST", f"{_BASE_URL}/metric-aggregates",
         json=payload, headers=_headers(), timeout=60,
     )
     resp.raise_for_status()
@@ -145,8 +153,8 @@ def _paginate_campaign_report(start: datetime, end: datetime, statistics: list[s
             },
         }
     }
-    resp = requests.post(
-        f"{_BASE_URL}/campaign-values-reports",
+    resp = _request_with_retry(
+        "POST", f"{_BASE_URL}/campaign-values-reports",
         json=payload, headers=_headers(), timeout=60,
     )
     resp.raise_for_status()
@@ -154,7 +162,9 @@ def _paginate_campaign_report(start: datetime, end: datetime, statistics: list[s
     rows = data.get("data", {}).get("attributes", {}).get("results", [])
     next_url = data.get("links", {}).get("next")
     while next_url:
-        resp = requests.get(next_url, headers=_headers(), timeout=60)
+        log.info("Campaign report pagination — waiting %ds for rate limit", _REPORTING_PAGE_DELAY)
+        time.sleep(_REPORTING_PAGE_DELAY)
+        resp = _request_with_retry("GET", next_url, headers=_headers(), timeout=60)
         resp.raise_for_status()
         data = resp.json()
         rows.extend(data.get("data", {}).get("attributes", {}).get("results", []))
@@ -182,7 +192,7 @@ def _paginate_flow_report(start: datetime, end: datetime, statistics: list[str])
         }
     }
     url = f"{_BASE_URL}/flow-values-reports"
-    resp = requests.post(url, json=payload, headers=_headers(), timeout=60)
+    resp = _request_with_retry("POST", url, json=payload, headers=_headers(), timeout=60)
     resp.raise_for_status()
     data = resp.json()
     rows = data.get("data", {}).get("attributes", {}).get("results", [])
@@ -192,8 +202,10 @@ def _paginate_flow_report(start: datetime, end: datetime, statistics: list[str])
         cursor = parse_qs(parsed.query).get("page[cursor]", [None])[0]
         if not cursor:
             break
-        resp = requests.post(
-            url, json=payload, headers=_headers(), timeout=60,
+        log.info("Flow report pagination — waiting %ds for rate limit", _REPORTING_PAGE_DELAY)
+        time.sleep(_REPORTING_PAGE_DELAY)
+        resp = _request_with_retry(
+            "POST", url, json=payload, headers=_headers(), timeout=60,
             params={"page[cursor]": cursor},
         )
         resp.raise_for_status()
@@ -284,13 +296,13 @@ def _get_subscriber_count() -> Optional[int]:
     """
     url = f"{_BASE_URL}/segments"
     while url:
-        resp = requests.get(url, headers=_headers(), timeout=60)
+        resp = _request_with_retry("GET", url, headers=_headers(), timeout=60)
         resp.raise_for_status()
         data = resp.json()
         for seg in data.get("data", []):
             if seg["attributes"]["name"] == _SUBSCRIBER_SEGMENT_NAME:
-                detail = requests.get(
-                    f"{_BASE_URL}/segments/{seg['id']}",
+                detail = _request_with_retry(
+                    "GET", f"{_BASE_URL}/segments/{seg['id']}",
                     params={"additional-fields[segment]": "profile_count"},
                     headers=_headers(), timeout=60,
                 )

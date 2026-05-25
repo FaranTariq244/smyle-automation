@@ -417,12 +417,130 @@ def find_header_row(worksheet, mode: str = 'daily') -> Tuple[Optional[int], Dict
                 worksheet.batch_update(updates, value_input_option='USER_ENTERED')
                 print(f"    Added {len(new_headers)} new columns: {[h[1] for h in new_headers]}")
 
+            # Rearrange columns to match mapping order if needed
+            best_mapping = _rearrange_columns_if_needed(worksheet, best_row, best_mapping, mode)
+
             return best_row, best_mapping
 
         return None, {}
     except Exception as e:
         print(f"    Error finding header row: {e}")
         return None, {}
+
+
+def _rearrange_columns_if_needed(worksheet, header_row: int,
+                                  column_mapping: Dict[str, int],
+                                  mode: str = 'daily') -> Dict[str, int]:
+    """
+    Rearrange metric columns in the sheet to match the current mapping order.
+    Fixed columns (Date, wk) stay in place. Only metric columns are moved.
+    Moves both headers AND all data rows together.
+
+    Returns updated column_mapping if rearranged, or original if no change needed.
+    """
+    try:
+        import time as _time
+
+        mappings = get_column_mapping_objects(mode)
+        if not mappings:
+            return column_mapping
+
+        # Determine where metric columns start (after fixed columns like Date, wk)
+        if mode == 'weekly':
+            fixed_positions = []
+            for fixed_name in ['wk', 'date']:
+                if fixed_name in column_mapping:
+                    fixed_positions.append(column_mapping[fixed_name])
+            metric_start = max(fixed_positions) + 1 if fixed_positions else 1
+        else:
+            date_col = column_mapping.get('date', 1)
+            metric_start = date_col + 1
+
+        # Get current metric columns sorted by their sheet position
+        current_metrics = sorted(
+            [(name, idx) for name, idx in column_mapping.items() if idx >= metric_start],
+            key=lambda x: x[1]
+        )
+        current_order = [name for name, _ in current_metrics]
+
+        # Build desired order: mapped columns first (in mapping order), then extras
+        mapped_names = set()
+        desired_order = []
+        for m in mappings:
+            if m.sheet_column_lower in column_mapping and column_mapping[m.sheet_column_lower] >= metric_start:
+                desired_order.append(m.sheet_column_lower)
+                mapped_names.add(m.sheet_column_lower)
+
+        # Extra columns in sheet but not in current mapping — keep at end
+        for name, _ in current_metrics:
+            if name not in mapped_names:
+                desired_order.append(name)
+
+        # Check if rearrange is needed
+        if current_order == desired_order:
+            return column_mapping
+
+        print(f"    [REARRANGE] Column order differs from mapping - rearranging sheet...")
+        print(f"      Current: {current_order}")
+        print(f"      Desired: {desired_order}")
+
+        # Read all values from sheet
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            return column_mapping
+
+        # Build old column index lookup
+        old_col_for_name = {name: idx for name, idx in current_metrics}
+
+        # Build rearranged metric data for every row
+        num_metric_cols = len(desired_order)
+        updated_metric_data = []
+
+        for row in all_values:
+            new_metric_values = []
+            for name in desired_order:
+                old_col = old_col_for_name.get(name)
+                if old_col is not None and old_col - 1 < len(row):
+                    new_metric_values.append(row[old_col - 1])
+                else:
+                    new_metric_values.append('')
+            updated_metric_data.append(new_metric_values)
+
+        # Write back just the metric columns range
+        start_cell = gspread.utils.rowcol_to_a1(1, metric_start)
+        end_cell = gspread.utils.rowcol_to_a1(len(updated_metric_data), metric_start + num_metric_cols - 1)
+        range_str = f"{start_cell}:{end_cell}"
+
+        worksheet.update(range_str, updated_metric_data, value_input_option='USER_ENTERED')
+        print(f"    [REARRANGE] Moved {num_metric_cols} columns across {len(updated_metric_data)} rows ({range_str})")
+
+        _time.sleep(1)
+
+        # Clear any leftover columns if old range was wider
+        old_max_col = max(idx for _, idx in current_metrics) if current_metrics else metric_start
+        new_max_col = metric_start + num_metric_cols - 1
+        if old_max_col > new_max_col:
+            clear_start = gspread.utils.rowcol_to_a1(1, new_max_col + 1)
+            clear_end = gspread.utils.rowcol_to_a1(len(all_values), old_max_col)
+            clear_range = f"{clear_start}:{clear_end}"
+            worksheet.batch_clear([clear_range])
+            print(f"    [REARRANGE] Cleared leftover columns ({clear_range})")
+            _time.sleep(1)
+
+        # Build updated column_mapping
+        new_mapping = {}
+        for name, col_idx in column_mapping.items():
+            if col_idx < metric_start:
+                new_mapping[name] = col_idx  # Fixed columns unchanged
+        for i, name in enumerate(desired_order):
+            new_mapping[name] = metric_start + i
+
+        print(f"    [REARRANGE] Complete")
+        return new_mapping
+
+    except Exception as e:
+        print(f"    [REARRANGE] Error rearranging columns: {e}")
+        return column_mapping
 
 
 def find_date_row(worksheet, date_obj: datetime, header_row: int) -> Optional[int]:

@@ -70,6 +70,25 @@ API_KEY_SETTINGS = [
     "KLAVIYO_API_KEY",
 ]
 
+# Workflows: standalone pipeline scripts runnable from the Workflows page.
+# Each script must be self-contained, stream progress to stdout, and exit
+# 0 on success. Browser mode is passed via the HEADLESS_MODE env var.
+WORKFLOWS = {
+    "tiktok_toship": {
+        "name": "TikTok To-Ship Tracking Sync",
+        "description": "Exports all 'awaiting shipment' orders from TikTok Seller "
+                       "Center, matches each to its Shopify order by TikTok Order ID, "
+                       "looks up the shipped tracking number in my-fulfilment.com "
+                       "(Nic. Oud), and reports it. Shipped orders are prepared for "
+                       "TikTok tracking upload.",
+        "source": "TikTok Seller Center",
+        # Systems this workflow touches — shown as chips on the card.
+        "systems": ["TikTok Seller Center", "Shopify", "my-fulfilment.com"],
+        "output": "reports/tiktok_exports",
+        "script": "tiktok_toship_export_raw.py",
+    },
+}
+
 DEFAULT_MAX_LOG_FILES = 100
 
 
@@ -284,13 +303,27 @@ def on_schedule_due(schedule: dict) -> bool:
         broadcast_log("Scheduled job is due but another run is active. Will retry soon.\n")
         return False
 
+    schedule_id = schedule.get("id")
+    task = schedule.get("task", "all")
+
+    # Workflows are scheduled with a "workflow:<key>" task and run via their
+    # own runner (no report date logic applies).
+    if task.startswith("workflow:"):
+        wf_key = task.split(":", 1)[1]
+        if wf_key not in WORKFLOWS:
+            broadcast_log(f"Scheduled workflow '{wf_key}' is unknown — skipping.\n")
+            return False
+        if schedule_id:
+            state.scheduler_store.mark_running(schedule_id, "Triggered automatically")
+        start_workflow(wf_key, headless=True, origin="scheduled", schedule_id=schedule_id)
+        return True
+
     # Start the scheduled job
     days_ago = max(0, int(schedule.get("run_for_days_ago") or 1))
     target_date = datetime.combine(
         (datetime.now() - timedelta(days=days_ago)).date(), datetime.min.time()
     )
     date_str = target_date.strftime("%d-%b-%Y")
-    schedule_id = schedule.get("id")
 
     if schedule_id:
         state.scheduler_store.mark_running(schedule_id, "Triggered automatically")
@@ -299,7 +332,6 @@ def on_schedule_due(schedule: dict) -> bool:
     state.current_run_origin = "scheduled"
 
     # Check if datads_weekly or weekly is in the task list - calculate weekly date range
-    task = schedule.get("task", "all")
     end_date_str = ""
     if "datads_weekly" in task or "weekly" in task.split(","):
         # For weekly tasks: end date = days_ago, start date = days_ago + 6
@@ -320,6 +352,9 @@ def on_schedule_due(schedule: dict) -> bool:
 
 def _task_display_name(task: str) -> str:
     """Return a human-readable name for a task string (single or comma-separated)."""
+    if task.startswith("workflow:"):
+        wf = WORKFLOWS.get(task.split(":", 1)[1])
+        return wf["name"] if wf else task
     labels = {
         "all": "All reports",
         "daily": "Daily Report",
@@ -386,6 +421,83 @@ def start_task_with_date(task: str, date_obj: datetime, date_str: str, origin: s
         target=watch_process_output, args=(proc, task, date_str), daemon=True
     )
     thread.start()
+
+
+def start_workflow(key: str, headless: bool, origin: str = "manual",
+                   schedule_id: Optional[int] = None) -> None:
+    """Start a workflow script as a subprocess, streaming output like reports."""
+    wf = WORKFLOWS[key]
+    started_str = datetime.now().strftime("%d-%b-%Y %H:%M")
+
+    state.running = True
+    state.stop_requested = False
+    state.current_task = f"workflow:{key}"
+    state.current_date_str = started_str
+    state.current_run_origin = origin
+    state.current_schedule_id = schedule_id
+    state._completion_in_progress = False
+    state.last_log_path = None
+    state.current_log_path = start_log_file(wf["name"], started_str, origin)
+
+    mode = "headless" if headless else "visible"
+    origin_label = "Scheduled run" if origin == "scheduled" else "Manual run"
+    broadcast_status(f"{origin_label}: {wf['name']} ({mode})...", True)
+    broadcast_log(f"\n{'=' * 80}\n{origin_label} - Workflow: {wf['name']} ({mode} browser)\n{'=' * 80}\n")
+
+    cmd = [sys.executable, "-u", str(PROJECT_ROOT / wf["script"])]
+    env = build_subprocess_env()
+    env["HEADLESS_MODE"] = "1" if headless else "0"
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=env,
+        )
+        state.current_process = proc
+        state.current_pid = proc.pid
+    except Exception as exc:
+        broadcast_log(f"\nFailed to start workflow: {exc}\n")
+        broadcast_status("Failed to start workflow", False)
+        state.running = False
+        return
+
+    thread = threading.Thread(
+        target=watch_process_output, args=(proc, f"workflow:{key}", started_str), daemon=True
+    )
+    thread.start()
+
+
+def _workflow_last_run(wf: dict) -> Optional[Dict[str, Any]]:
+    """Find the newest log of this workflow and summarize its outcome."""
+    safe = wf["name"].replace(" ", "_").lower()
+    logs = sorted(state.log_dir.glob(f"*_{safe}_*.log"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+    if not logs:
+        return None
+    f = logs[0]
+    try:
+        content = f.read_text(encoding="utf-8", errors="replace").lower()
+        if "stopped by user" in content:
+            status = "stopped"
+        elif "completed successfully" in content:
+            status = "success"
+        elif "finished with issues" in content or "workflow failed" in content:
+            status = "failed"
+        else:
+            status = "incomplete"
+    except Exception:
+        status = "unknown"
+    return {
+        "status": status,
+        "started": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+        "log": f.name,
+    }
 
 
 def init_scheduler():
@@ -752,6 +864,48 @@ def run_task():
     start_task_with_date(task, date_obj, formatted_date, origin="manual", headless=headless)
 
     return jsonify({'success': True, 'message': f'Started {task} for {formatted_date}'})
+
+
+@app.route('/api/workflows', methods=['GET'])
+def list_workflows():
+    """List available workflows with their last-run outcome."""
+    current = None
+    if state.current_task and state.current_task.startswith("workflow:"):
+        current = state.current_task.split(":", 1)[1]
+    return jsonify({
+        'workflows': [
+            {
+                'key': key,
+                'name': wf['name'],
+                'description': wf['description'],
+                'source': wf['source'],
+                'systems': wf.get('systems', [wf['source']]),
+                'output': wf['output'],
+                'last_run': _workflow_last_run(wf),
+            }
+            for key, wf in WORKFLOWS.items()
+        ],
+        'running': state.running,
+        'current': current,
+    })
+
+
+@app.route('/api/workflows/run', methods=['POST'])
+def run_workflow():
+    """Start a workflow."""
+    if state.running:
+        return jsonify({'success': False, 'error': 'A task is already running'}), 409
+
+    data = request.json or {}
+    key = data.get('workflow', '')
+    if key not in WORKFLOWS:
+        return jsonify({'success': False, 'error': f'Unknown workflow: {key}'}), 400
+    headless = bool(data.get('headless', True))
+
+    start_workflow(key, headless)
+    mode = "headless" if headless else "visible browser"
+    return jsonify({'success': True,
+                    'message': f'Started {WORKFLOWS[key]["name"]} ({mode})'})
 
 
 @app.route('/api/run-schedule-now', methods=['POST'])

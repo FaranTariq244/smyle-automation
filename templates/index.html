@@ -522,6 +522,53 @@
         .badge-secondary { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary); }
         .badge-accent { background: var(--accent-glow); color: var(--accent); }
 
+        /* ── Workflows ── */
+        .workflows-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .wf-card { margin-bottom: 0; transition: border-color 0.2s ease; }
+
+        .wf-card.running {
+            border-color: var(--accent);
+            box-shadow: 0 0 14px var(--accent-glow);
+        }
+
+        .wf-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .wf-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            font-size: 11px;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .wf-chip svg { width: 11px; height: 11px; opacity: 0.7; }
+
+        .badge-running {
+            background: var(--accent-glow);
+            color: var(--accent);
+            animation: wfPulse 1.4s ease-in-out infinite;
+        }
+
+        @keyframes wfPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.45; }
+        }
+
         /* ── Table ── */
         .table-container { overflow-x: auto; }
 
@@ -1428,6 +1475,11 @@
                 Run Reports
             </button>
 
+            <button class="nav-item" onclick="showPage('workflows')">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                Workflows
+            </button>
+
             <button class="nav-item" onclick="showPage('logs')">
                 <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Run Logs
@@ -1476,10 +1528,13 @@
                         </button>
                     </div>
                     <div class="tool-card">
-                        <span class="badge badge-secondary">Coming soon</span>
-                        <h3>Data Quality Checks</h3>
-                        <p>Reserved slot for upcoming QA automation.</p>
-                        <button class="btn btn-secondary" disabled>Reserved</button>
+                        <span class="badge badge-accent">Active</span>
+                        <h3>Workflows</h3>
+                        <p>Automated pipelines — TikTok Shop order exports and more.</p>
+                        <button class="btn btn-primary" onclick="showPage('workflows')">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+                            Open
+                        </button>
                     </div>
                     <div class="tool-card">
                         <span class="badge badge-secondary">Coming soon</span>
@@ -1609,6 +1664,61 @@
                         <div class="progress-fill" id="progress-fill"></div>
                     </div>
                     <div class="log-container" id="log-container">Outputs from the automation scripts will stream here.
+
+</div>
+                </div>
+            </div>
+
+            <!-- ═══ Workflows Page ═══ -->
+            <div id="page-workflows" class="page">
+                <div class="page-header">
+                    <h2>Workflows</h2>
+                    <p>End-to-end pipelines that fetch, transform and extract data automatically</p>
+                </div>
+
+                <!-- Run options -->
+                <div class="card">
+                    <div class="card-header" style="margin-bottom:0;">
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <span style="font-size:12px; color:var(--text-secondary); font-weight:500;">Browser Mode:</span>
+                            <div style="display:flex; gap:4px;">
+                                <button class="btn btn-sm datads-mode-btn active" id="wf-mode-headless" onclick="setWfBrowserMode('headless')">Headless</button>
+                                <button class="btn btn-sm datads-mode-btn" id="wf-mode-visible" onclick="setWfBrowserMode('visible')">Visible</button>
+                            </div>
+                            <span style="font-size:11px; color:var(--text-secondary);">Use Visible to watch the browser work or for a first-time login.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Workflow cards (rendered from /api/workflows) -->
+                <div class="workflows-grid" id="workflow-list">
+                    <div class="card wf-card"><p style="color:var(--text-secondary); font-size:13px;">Loading workflows...</p></div>
+                </div>
+
+                <!-- Status + Live Log -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                            Live Output
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-danger btn-sm" id="wf-btn-stop" onclick="stopTask()" disabled>
+                                <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                                Stop
+                            </button>
+                            <button class="btn btn-ghost btn-sm" onclick="clearWfLog()">Clear</button>
+                        </div>
+                    </div>
+
+                    <div class="status-bar">
+                        <div class="status-indicator idle" id="wf-status-indicator"></div>
+                        <span class="status-text" id="wf-status-text">Idle: no workflow running</span>
+                    </div>
+                    <div class="progress-bar" style="margin-bottom: 14px;">
+                        <div class="progress-fill" id="wf-progress-fill"></div>
+                    </div>
+                    <div class="log-container" id="wf-log-container">Workflow output will stream here live.
 
 </div>
                 </div>
@@ -2264,6 +2374,7 @@
             if (pageName === 'settings') { loadSettings(); loadMappings(); loadReportAvailability(); showSettingsTab('sheets', true); }
             else if (pageName === 'schedules') { loadSchedule(); loadAllSchedules(); }
             else if (pageName === 'logs') { loadLogs(); showLogList(); }
+            else if (pageName === 'workflows') { loadWorkflows(); }
 
             // Close mobile sidebar
             document.getElementById('sidebar').classList.remove('open');
@@ -2295,6 +2406,20 @@
             }
 
             updateButtons(running);
+
+            // Mirror status to the Workflows page
+            const wfText = document.getElementById('wf-status-text');
+            if (wfText) {
+                wfText.textContent = status;
+                document.getElementById('wf-status-indicator').classList.toggle('running', running);
+                document.getElementById('wf-status-indicator').classList.toggle('idle', !running);
+                document.getElementById('wf-progress-fill').classList.toggle('indeterminate', running);
+                document.getElementById('wf-btn-stop').disabled = !running;
+                document.querySelectorAll('.wf-run-btn').forEach(b => b.disabled = running);
+                if (document.getElementById('page-workflows').classList.contains('active')) {
+                    loadWorkflows();
+                }
+            }
         }
 
         function updateButtons(running) {
@@ -2307,15 +2432,22 @@
             document.getElementById('btn-stop').disabled = !running;
         }
 
-        // Log handling
+        // Log handling (mirrored to the Reports and Workflows live consoles)
         function appendLog(message) {
-            const container = document.getElementById('log-container');
-            container.textContent += message;
-            container.scrollTop = container.scrollHeight;
+            for (const id of ['log-container', 'wf-log-container']) {
+                const container = document.getElementById(id);
+                if (!container) continue;
+                container.textContent += message;
+                container.scrollTop = container.scrollHeight;
+            }
         }
 
         function clearLog() {
             document.getElementById('log-container').textContent = '';
+        }
+
+        function clearWfLog() {
+            document.getElementById('wf-log-container').textContent = '';
         }
 
         // Toast notifications
@@ -2385,6 +2517,108 @@
                 }
             } catch (error) {
                 showToast('Failed to start task', 'error');
+            }
+        }
+
+        // ── Workflows ──
+        let wfBrowserMode = 'headless';
+
+        function setWfBrowserMode(mode) {
+            wfBrowserMode = mode;
+            document.getElementById('wf-mode-headless').classList.toggle('active', mode === 'headless');
+            document.getElementById('wf-mode-visible').classList.toggle('active', mode === 'visible');
+        }
+
+        async function loadWorkflows() {
+            try {
+                const response = await fetch('/api/workflows');
+                renderWorkflows(await response.json());
+            } catch (error) {
+                document.getElementById('workflow-list').innerHTML =
+                    '<div class="card wf-card"><p style="color:var(--danger); font-size:13px;">Failed to load workflows.</p></div>';
+            }
+        }
+
+        function renderWorkflows(data) {
+            const list = document.getElementById('workflow-list');
+            list.innerHTML = data.workflows.map(wf => {
+                const isCurrent = data.running && data.current === wf.key;
+                let badge;
+                if (isCurrent) {
+                    badge = '<span class="badge badge-running">Running…</span>';
+                } else if (wf.last_run) {
+                    const map = {
+                        success: '<span class="badge badge-success">Last run: success</span>',
+                        failed: '<span class="badge badge-danger">Last run: failed</span>',
+                        stopped: '<span class="badge badge-warning">Last run: stopped</span>',
+                    };
+                    badge = map[wf.last_run.status] ||
+                        `<span class="badge badge-secondary">Last run: ${wf.last_run.status}</span>`;
+                } else {
+                    badge = '<span class="badge badge-secondary">Never run</span>';
+                }
+                const lastInfo = wf.last_run
+                    ? `<span class="wf-chip"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>${wf.last_run.started}</span>`
+                    : '';
+                return `
+                <div class="card wf-card ${isCurrent ? 'running' : ''}">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title" style="margin-bottom:6px;">
+                                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                ${wf.name}
+                            </div>
+                            ${badge}
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-secondary btn-sm" onclick="scheduleWorkflow('${wf.key}')" title="Create a schedule for this workflow">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                Schedule
+                            </button>
+                            <button class="btn btn-primary btn-sm wf-run-btn" onclick="runWorkflow('${wf.key}')" ${data.running ? 'disabled' : ''}>
+                                <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                Run
+                            </button>
+                        </div>
+                    </div>
+                    <p style="font-size:13px; color:var(--text-secondary); margin:0;">${wf.description}</p>
+                    <div class="wf-meta">
+                        ${(wf.systems || [wf.source]).map(sys => `
+                        <span class="wf-chip"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 010 18"/></svg>${sys}</span>`).join('')}
+                        <span class="wf-chip"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>${wf.output}</span>
+                        ${lastInfo}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // Jump to the Schedules page with this workflow pre-selected.
+        let pendingScheduleWorkflow = null;
+        function scheduleWorkflow(key) {
+            pendingScheduleWorkflow = key;
+            showPage('schedules');
+        }
+
+        async function runWorkflow(key) {
+            if (isRunning) {
+                showToast('A task is already running', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/api/workflows/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workflow: key, headless: wfBrowserMode === 'headless' })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    loadWorkflows();
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to start workflow', 'error');
             }
         }
 
@@ -2565,6 +2799,9 @@
             const boxes = getReportCheckboxes();
             const checked = Array.from(boxes).filter(cb => cb.checked).map(cb => cb.value);
             if (checked.length === 0) return '';
+            // A workflow is a standalone task (never combined with reports).
+            const wf = checked.find(v => v.startsWith('workflow:'));
+            if (wf) return wf;
             // "all" only covers the core daily reports (daily,order,addtracker,datads)
             // datads_weekly is separate and always explicit
             const coreReports = ['daily', 'order', 'addtracker', 'datads'];
@@ -2572,6 +2809,51 @@
             const hasWeekly = checked.includes('datads_weekly');
             if (checkedCore.length === coreReports.length && !hasWeekly) return 'all';
             return checked.join(',');
+        }
+
+        // Keep workflows mutually exclusive with reports (and each other).
+        function onTaskToggle(cb) {
+            if (cb.checked) {
+                const isWf = cb.value.startsWith('workflow:');
+                getReportCheckboxes().forEach(o => {
+                    if (o === cb) return;
+                    const oIsWf = o.value.startsWith('workflow:');
+                    if (isWf || oIsWf) o.checked = false;  // workflow clears all; report clears workflows
+                });
+            }
+            updateReportCount();
+        }
+
+        // Names for workflow tasks, populated from /api/workflows.
+        let WF_NAMES = {};
+
+        async function loadScheduleWorkflows() {
+            try {
+                const resp = await fetch('/api/workflows');
+                const data = await resp.json();
+                const container = document.getElementById('report-list-items');
+                // Remove any previously-injected workflow rows, then re-add.
+                container.querySelectorAll('.sched-wf-item').forEach(el => el.remove());
+                data.workflows.forEach(wf => {
+                    WF_NAMES['workflow:' + wf.key] = wf.name;
+                    const label = document.createElement('label');
+                    label.className = 'report-list-item sched-wf-item';
+                    label.innerHTML = `
+                        <input type="checkbox" class="sched-report-chk" value="workflow:${wf.key}">
+                        <div class="report-list-item-text">
+                            <span class="report-list-item-name">${wf.name} <span class="badge badge-accent" style="margin-left:6px;">Workflow</span></span>
+                            <span class="report-list-item-desc">${wf.systems ? wf.systems.join(' → ') : wf.source}</span>
+                        </div>`;
+                    container.appendChild(label);
+                });
+                // Wire exclusivity on every checkbox (reports + workflows).
+                getReportCheckboxes().forEach(cb => {
+                    cb.removeEventListener('change', cb._taskToggle || (() => {}));
+                    cb._taskToggle = () => onTaskToggle(cb);
+                    cb.addEventListener('change', cb._taskToggle);
+                });
+                updateReportCount();
+            } catch (e) { /* non-fatal */ }
         }
 
         function setSelectedTask(taskStr) {
@@ -2590,9 +2872,13 @@
         }
 
         function toggleAllReports() {
-            const boxes = getReportCheckboxes();
-            const allChecked = Array.from(boxes).every(cb => cb.checked);
-            boxes.forEach(cb => cb.checked = !allChecked);
+            // "Toggle all" applies to reports only; workflows are standalone.
+            const boxes = Array.from(getReportCheckboxes()).filter(cb => !cb.value.startsWith('workflow:'));
+            const allChecked = boxes.every(cb => cb.checked);
+            getReportCheckboxes().forEach(cb => {
+                if (cb.value.startsWith('workflow:')) cb.checked = false;
+                else cb.checked = !allChecked;
+            });
             updateReportCount();
         }
 
@@ -2611,6 +2897,10 @@
         function formatTaskDisplay(taskStr) {
             const labels = { daily: 'Daily', order: 'Order Type', addtracker: 'Add Tracker', datads: 'DataAds Daily', datads_weekly: 'DataAds Weekly', weekly: 'SMYLE_ONLINE_STRATEGY_RN_FC1 (Weekly)', all: 'All Reports' };
             if (!taskStr || taskStr === 'all') return '<span class="task-pill">All Reports</span>';
+            if (taskStr.startsWith('workflow:')) {
+                const name = WF_NAMES[taskStr] || taskStr.split(':')[1];
+                return `<span class="task-pill" style="background:var(--accent-glow); color:var(--accent);">⚡ ${escapeHtml(name)}</span>`;
+            }
             return taskStr.split(',').map(t => `<span class="task-pill">${escapeHtml(labels[t.trim()] || t.trim())}</span>`).join('');
         }
 
@@ -2639,9 +2929,21 @@
         }
 
         async function loadSchedule() {
-            // Just reset the form and load the table
+            // Inject workflow options, then reset the form and load the table
+            await loadScheduleWorkflows();
             resetScheduleForm();
             loadAllSchedules();
+            // If arriving via a workflow card's "Schedule" button, pre-select it.
+            if (pendingScheduleWorkflow) {
+                const key = pendingScheduleWorkflow;
+                pendingScheduleWorkflow = null;
+                const nameInput = document.getElementById('schedule-name');
+                if (nameInput) nameInput.value = WF_NAMES['workflow:' + key] || key;
+                setSelectedTask('workflow:' + key);
+                document.getElementById('schedule-form-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                if (nameInput) nameInput.focus();
+                showToast('Workflow selected — set a time and click Add Schedule', 'info');
+            }
         }
 
         async function editSchedule(scheduleId) {

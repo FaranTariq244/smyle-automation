@@ -20,6 +20,16 @@ bigquery_sa.json
 # Environment variables
 .env
 
+# Shopify credentials (live admin token — never commit)
+shopify.env
+shopify-connection.env
+
+# my-fulfilment.com (Nic. Oud) portal login — never commit
+fulfilment.env
+
+# Throwaway debug scripts (e.g. _debug_x.py) — but NOT dunders like __init__.py
+_[!_]*.py
+
 # IDE
 .vscode/
 .idea/
@@ -30,8 +40,9 @@ bigquery_sa.json
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs (and runtime debug/failure screenshots saved alongside them)
 *.log
+logs/*.png
 
 # Screenshots and reports
 screenshots/

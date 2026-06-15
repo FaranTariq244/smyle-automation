@@ -755,7 +755,7 @@ def create_daily_worksheet(spreadsheet, landing_page_url: str, existing_names: L
 def parse_value(value) -> float:
     """
     Parse a value string to a float.
-    Handles: "1,234", "€1,234.56", "1.5%", "1.2K", "2.5M"
+    Handles: "1,234", "€1,234.56", "1.5%", "1.2K"/"1.2k", "2.5M"/"2.5m"
     """
     if value is None or value == '' or value == '-':
         return 0.0
@@ -764,10 +764,10 @@ def parse_value(value) -> float:
     value_str = value_str.replace('€', '').replace('%', '').replace('$', '').strip()
 
     multiplier = 1
-    if value_str.endswith('K'):
+    if value_str[-1:].upper() == 'K':
         multiplier = 1000
         value_str = value_str[:-1]
-    elif value_str.endswith('M'):
+    elif value_str[-1:].upper() == 'M':
         multiplier = 1000000
         value_str = value_str[:-1]
 

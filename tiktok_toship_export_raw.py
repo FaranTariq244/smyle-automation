@@ -631,6 +631,37 @@ def run_fulfilment_phase(driver, headless, found):
     return results
 
 
+def run_upload_phase(driver, results):
+    """Phase 4: submit found tracking back to TikTok Seller Center.
+
+    Builds the shipment list from Phase 3 results (only orders that are
+    actually shipped and have a tracking number), then downloads the
+    Seller Center template, fills it, and uploads it.
+    """
+    log_phase("PHASE 4/4: Submit tracking to TikTok Seller Center")
+    shipments = [
+        {
+            "order_id": tiktok_id,
+            "provider": tiktok_provider(info.get("carrier")),
+            "tracking": info["tracking_number"],
+        }
+        for tiktok_id, _name, info in results
+        if info and info.get("shipped") and info.get("tracking_number")
+    ]
+    if not shipments:
+        log.info("No shipped orders with tracking — nothing to upload to TikTok.")
+        return None
+
+    log.info("Uploading tracking for %d order(s) to TikTok ...", len(shipments))
+    for s in shipments:
+        log.info("  order %s -> %s (%s)", s["order_id"], s["tracking"], s["provider"])
+    template = download_ship_template(driver)
+    filled = fill_ship_template(template, shipments)
+    ok, verdict = upload_ship_file(driver, filled)
+    log.info("TikTok upload %s: %s", "SUCCEEDED" if ok else "did not confirm", verdict)
+    return ok
+
+
 def download_ship_template(driver):
     """Phase 4a: download the shipping-upload template from Seller Center."""
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -747,32 +778,54 @@ def upload_ship_file(driver, file_path):
     rows = driver.find_elements(
         By.XPATH, "//table//tr[td]")
     log.info("Review page lists %d order row(s) — confirming submission.", len(rows))
+    # The confirm button text is dynamic, e.g. "Submit 1 parcel" /
+    # "Submit 3 parcels", so match on a contained keyword rather than the
+    # exact label.
     submit = None
-    for label in ("Submit", "Confirm", "Save", "Add tracking info", "Upload"):
+    for keyword in ("Submit", "Confirm", "Save", "Add tracking info", "Upload"):
         submit = find_visible(
-            driver, f"//button[.//text()[normalize-space()='{label}']][not(@disabled)]")
+            driver,
+            f"//button[contains(normalize-space(.), '{keyword}')][not(@disabled)]")
         if submit:
             break
     if not submit:
         screenshot(driver, "upload_no_submit_btn")
         log.warning("UPLOAD RESULT: orders identified but no submit button found")
         return False, "no submit button on review page"
+    # Read the label before clicking — the click navigates/re-renders the
+    # page, making the element reference stale immediately afterwards.
+    submit_label = (submit.text or "").strip() or "Submit"
     js_click(driver, submit)
-    log.info("Clicked final '%s' — waiting for confirmation.", submit.text.strip())
+    log.info("Clicked final '%s' — waiting for confirmation.", submit_label)
 
-    deadline = time.time() + 60
+    # After the click TikTok shows a "Processing... please wait" screen, then
+    # either a success state or navigates back to Manage orders. Wait out the
+    # processing screen; success = explicit success text OR the review page
+    # ("Add tracking info") having gone away with no error shown.
+    saw_processing = False
+    deadline = time.time() + 120
     while time.time() < deadline:
         time.sleep(3)
         body = driver.find_element(By.TAG_NAME, "body").text.lower()
+        if "please wait" in body and "processing" in body:
+            saw_processing = True
+            continue
+        if "error" in body or "failed" in body:
+            screenshot(driver, "upload_failed")
+            log.info("UPLOAD RESULT (FAILED): error after final submit")
+            return False, "error after final submit"
         if "success" in body or "uploaded" in body or "submitted" in body:
             screenshot(driver, "upload_success")
             log.info("UPLOAD RESULT (SUCCESS): tracking info submitted for %d order(s)",
                      len(rows))
             return True, f"submitted {len(rows)} order(s)"
-        if "error" in body or "failed" in body:
-            screenshot(driver, "upload_failed")
-            log.info("UPLOAD RESULT (FAILED): error after final submit")
-            return False, "error after final submit"
+        review_gone = not find_visible(
+            driver, "//*[normalize-space(text())='Add tracking info']")
+        if saw_processing and review_gone:
+            screenshot(driver, "upload_success")
+            log.info("UPLOAD RESULT (SUCCESS): processing finished, tracking "
+                     "submitted for %d order(s)", len(rows))
+            return True, f"submitted {len(rows)} order(s)"
     screenshot(driver, "upload_result")
     log.warning("UPLOAD RESULT: no confirmation detected after final submit")
     return False, "no confirmation after final submit"
@@ -866,7 +919,8 @@ def main():
         records = extract_orders(csv_path)
         found, _missing = match_orders_in_shopify(records)
         if found:
-            run_fulfilment_phase(driver, headless, found)
+            results = run_fulfilment_phase(driver, headless, found)
+            run_upload_phase(driver, results)
         else:
             log_phase("FINAL SUMMARY")
             log.info("No orders matched in Shopify — nothing to look up in fulfilment.")

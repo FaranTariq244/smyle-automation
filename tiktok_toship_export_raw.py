@@ -147,11 +147,21 @@ def ensure_logged_in(driver, headless):
 
 
 def first_history_entry(driver):
-    """Return the report name of the top Export History row (or None)."""
+    """Return the report name of the top Export History row (or None).
+
+    The heading TikTok renders is 'Export history (2)' — lowercase 'h' and a
+    trailing count — so the match must be case-insensitive. We also anchor on
+    the heading's own text() node (not normalize-space(.), which matches the
+    whole dialog container as an ancestor); the report rows are only in the
+    following:: axis of the *leaf* heading element, not of the container.
+    """
     el = find_visible(
         driver,
-        "//*[contains(normalize-space(.), 'Export History')]"
-        "/following::*[contains(normalize-space(text()), '.csv') or contains(normalize-space(text()), '.xlsx')][1]",
+        "//*[contains("
+        "translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'),"
+        " 'export history')]"
+        "/following::*[contains(normalize-space(text()), '.csv') "
+        "or contains(normalize-space(text()), '.xlsx')][1]",
     )
     return el.text.strip() if el else None
 

@@ -27,6 +27,11 @@ shopify-connection.env
 # my-fulfilment.com (Nic. Oud) portal login — never commit
 fulfilment.env
 
+# Slack Incoming Webhook URL — secret, never commit
+supervisor/slack.env
+# Supervisor rendered-prompt scratch files
+supervisor/_prompt_*.txt
+
 # Throwaway debug scripts (e.g. _debug_x.py) — but NOT dunders like __init__.py
 _[!_]*.py
 

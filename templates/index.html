@@ -558,6 +558,33 @@
 
         .wf-chip svg { width: 11px; height: 11px; opacity: 0.7; }
 
+        /* AI-supervised marker — identifies workflows watched by the Claude agent */
+        .badge-ai {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 9px;
+            border-radius: 999px;
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            color: #fff;
+            background: linear-gradient(135deg, #7c3aed 0%, #2563eb 60%, #06b6d4 100%);
+            box-shadow: 0 0 10px rgba(124, 58, 237, 0.45);
+            vertical-align: middle;
+        }
+        .badge-ai svg { width: 12px; height: 12px; }
+
+        /* "Run with AI" button */
+        .btn-ai {
+            background: linear-gradient(135deg, #7c3aed 0%, #2563eb 60%, #06b6d4 100%);
+            color: #fff;
+            border: none;
+            box-shadow: 0 0 10px rgba(124, 58, 237, 0.35);
+        }
+        .btn-ai:hover:not(:disabled) { filter: brightness(1.1); box-shadow: 0 0 14px rgba(124, 58, 237, 0.55); }
+        .btn-ai:disabled { opacity: 0.5; cursor: not-allowed; }
+
         .badge-running {
             background: var(--accent-glow);
             color: var(--accent);
@@ -2567,6 +2594,7 @@
                             <div class="card-title" style="margin-bottom:6px;">
                                 <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                                 ${wf.name}
+                                ${wf.ai_supervised ? `<span class="badge-ai" title="Supervised by an AI agent: runs on a schedule, self-heals on failure, and reports to Slack."><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4L12 3z"/></svg>AI Supervised</span>` : ''}
                             </div>
                             ${badge}
                         </div>
@@ -2579,6 +2607,10 @@
                                 <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                                 Run
                             </button>
+                            ${wf.ai_supervised ? `<button class="btn btn-ai btn-sm wf-run-btn" onclick="runWorkflowAI('${wf.key}')" ${data.running ? 'disabled' : ''} title="Run through the AI supervisor: it watches the run, fixes problems, builds the Excel report, and posts a summary to Slack.">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4L12 3z"/></svg>
+                                Run with AI
+                            </button>` : ''}
                         </div>
                     </div>
                     <p style="font-size:13px; color:var(--text-secondary); margin:0;">${wf.description}</p>
@@ -2619,6 +2651,32 @@
                 }
             } catch (error) {
                 showToast('Failed to start workflow', 'error');
+            }
+        }
+
+        async function runWorkflowAI(key) {
+            if (isRunning) {
+                showToast('A task is already running', 'error');
+                return;
+            }
+            if (!confirm('Run this workflow with the AI supervisor?\n\nThe AI agent will run and watch it, fix problems automatically if it can, build the Excel report, and post a summary to Slack. This can take longer than a normal run.')) {
+                return;
+            }
+            try {
+                const response = await fetch('/api/workflows/run-ai', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workflow: key })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showToast(data.message, 'success');
+                    loadWorkflows();
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to start AI run', 'error');
             }
         }
 

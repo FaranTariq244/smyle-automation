@@ -1,0 +1,61 @@
+{
+  "_comment": "Registry of workflows the Supervisor can run. Add a new entry here to supervise another integration later — no other file needs to change.",
+  "selftest": {
+    "name": "Supervisor Self-Test",
+    "script": "supervisor/selftest_workflow.py",
+    "args": [],
+    "timeout_minutes": 3,
+    "success_markers": ["Workflow completed successfully"],
+    "report_builder": "",
+    "report_out": "",
+    "what_it_does": "A dummy workflow that validates the supervisor pipeline end-to-end (run -> detect success -> Slack). Touches nothing real.",
+    "known_issues": []
+  },
+  "selftest_fail": {
+    "name": "Supervisor Self-Test (Failure)",
+    "script": "supervisor/selftest_fail_workflow.py",
+    "args": [],
+    "timeout_minutes": 2,
+    "success_markers": ["Workflow completed successfully"],
+    "report_builder": "",
+    "report_out": "",
+    "max_fix_attempts": 0,
+    "what_it_does": "Dummy failing workflow to validate the supervisor FAILED Slack report (no auto-fix).",
+    "known_issues": []
+  },
+  "selftest_login": {
+    "name": "Supervisor Self-Test (Login)",
+    "script": "supervisor/selftest_login_workflow.py",
+    "args": [],
+    "timeout_minutes": 2,
+    "success_markers": ["Workflow completed successfully"],
+    "report_builder": "",
+    "report_out": "",
+    "max_fix_attempts": 1,
+    "login_required_markers": ["Not logged in to TikTok Seller Center"],
+    "login_help": "This is only a self-test of the login alert. (Real one tells you to run the workflow once in visible mode to log in.)",
+    "what_it_does": "Dummy to validate the login-required Slack alert preempts auto-fix.",
+    "known_issues": []
+  },
+  "tiktok_toship": {
+    "name": "TikTok To-Ship Tracking Sync",
+    "script": "tiktok_toship_export_raw.py",
+    "args": ["--headless"],
+    "timeout_minutes": 55,
+    "success_markers": ["Workflow completed successfully"],
+    "report_builder": "build_toship_report.py",
+    "report_out": "reports/tiktok_exports/TikTok_ToShip_Report_{date}.xlsx",
+    "login_required_markers": [
+      "Not logged in to TikTok Seller Center",
+      "MANUAL LOGIN REQUIRED",
+      "Manual login was not completed"
+    ],
+    "login_help": "TikTok Seller Center session has expired. On the server, run it ONCE in visible mode to log in: `venv\\Scripts\\python.exe tiktok_toship_export_raw.py` — a Chrome window opens, log into TikTok, and the saved session will work for scheduled runs again.",
+    "what_it_does": "Exports TikTok 'awaiting shipment' orders, matches them to Shopify, looks up shipped tracking in my-fulfilment.com (Nic. Oud), and uploads tracking back to TikTok.",
+    "known_issues": [
+      "The final upload step sometimes logs 'UPLOAD RESULT: no confirmation detected after final submit' EVEN WHEN THE UPLOAD SUCCEEDED. TikTok's real success screen reads 'Added tracking info for N parcels' and is saved to a screenshot logs/tiktok_upload_result_*.png. If the log shows 'Workflow completed successfully', treat the run as SUCCESS regardless of that warning.",
+      "my-fulfilment.com sometimes returns HTTP 500 and/or its session expires; the script already auto-retries and re-logs-in. A few 500 warnings in the log are NORMAL, not a failure.",
+      "If Chrome fails with 'session not created: Chrome instance exited', it is usually a ChromeDriver-vs-Chrome version mismatch or a stale chrome_profile lock. Fix: kill leftover chrome/chromedriver processes, then re-run (webdriver_manager auto-updates the driver)."
+    ]
+  }
+}

@@ -86,6 +86,10 @@ WORKFLOWS = {
         "systems": ["TikTok Seller Center", "Shopify", "my-fulfilment.com"],
         "output": "reports/tiktok_exports",
         "script": "tiktok_toship_export_raw.py",
+        # Supervised by the headless Claude Code agent (supervisor/) — runs on a
+        # schedule, self-heals on failure, and reports to Slack. Drives the "AI"
+        # badge on the workflow card.
+        "ai_supervised": True,
     },
 }
 
@@ -469,6 +473,110 @@ def start_workflow(key: str, headless: bool, origin: str = "manual",
 
     thread = threading.Thread(
         target=watch_process_output, args=(proc, f"workflow:{key}", started_str), daemon=True
+    )
+    thread.start()
+
+
+def _tail_file_to_dashboard(path: Path, stop_event: threading.Event) -> None:
+    """Stream new content appended to `path` to the dashboard until stopped."""
+    import time
+    last = 0
+    while not stop_event.is_set():
+        try:
+            if path.exists():
+                with path.open("r", encoding="utf-8", errors="replace") as f:
+                    f.seek(last)
+                    chunk = f.read()
+                    last = f.tell()
+                if chunk:
+                    broadcast_log(chunk)
+        except Exception:
+            pass
+        time.sleep(1)
+    try:  # final flush of anything written just before exit
+        if path.exists():
+            with path.open("r", encoding="utf-8", errors="replace") as f:
+                f.seek(last)
+                chunk = f.read()
+            if chunk:
+                broadcast_log(chunk)
+    except Exception:
+        pass
+
+
+def watch_supervised_output(proc: subprocess.Popen, task: str, date_str: str,
+                            run_log: Path) -> None:
+    """Stream a supervised (AI) run: tail the workflow log live + the agent's
+    final summary, then complete the task."""
+    import time
+    stop_event = threading.Event()
+    tail = threading.Thread(target=_tail_file_to_dashboard,
+                            args=(run_log, stop_event), daemon=True)
+    tail.start()
+    try:
+        if proc.stdout:
+            for line in proc.stdout:
+                broadcast_log(line)  # the agent's own output (e.g. final summary)
+                if state.current_log_path:
+                    try:
+                        with state.current_log_path.open("a", encoding="utf-8") as f:
+                            f.write(line)
+                    except Exception:
+                        pass
+        proc.wait()
+    finally:
+        stop_event.set()
+        time.sleep(1.2)
+        success = proc.returncode == 0 and not state.stop_requested
+        on_task_complete(task, date_str, success)
+
+
+def start_supervised_workflow(key: str) -> None:
+    """Run a workflow through the headless Claude supervisor (self-heals, builds
+    the Excel report, and posts to Slack), streaming live progress to the dashboard."""
+    wf = WORKFLOWS[key]
+    started_str = datetime.now().strftime("%d-%b-%Y %H:%M")
+
+    state.running = True
+    state.stop_requested = False
+    state.current_task = f"workflow:{key}"
+    state.current_date_str = started_str
+    state.current_run_origin = "manual-ai"
+    state.current_schedule_id = None
+    state._completion_in_progress = False
+    state.last_log_path = None
+    state.current_log_path = start_log_file(f"{wf['name']} (AI)", started_str, "manual")
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_log = PROJECT_ROOT / "logs" / f"supervisor_{key}_{stamp}.log"
+
+    broadcast_status(f"AI Supervisor: {wf['name']} running...", True)
+    broadcast_log(
+        f"\n{'=' * 80}\nAI-Supervised run - {wf['name']}\n"
+        f"The AI agent is running and watching this workflow. If it hits a problem "
+        f"it will try to fix it, then build the Excel report and post a summary to Slack.\n"
+        f"{'=' * 80}\n")
+
+    bat = PROJECT_ROOT / "supervisor" / "run_supervisor.bat"
+    cmd = ["cmd", "/c", str(bat), key, str(run_log)]
+    env = build_subprocess_env()
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,
+        )
+        state.current_process = proc
+        state.current_pid = proc.pid
+    except Exception as exc:
+        broadcast_log(f"\nFailed to start AI supervisor: {exc}\n")
+        broadcast_status("Failed to start AI run", False)
+        state.running = False
+        return
+
+    thread = threading.Thread(
+        target=watch_supervised_output,
+        args=(proc, f"workflow:{key}", started_str, run_log), daemon=True,
     )
     thread.start()
 
@@ -881,6 +989,7 @@ def list_workflows():
                 'source': wf['source'],
                 'systems': wf.get('systems', [wf['source']]),
                 'output': wf['output'],
+                'ai_supervised': wf.get('ai_supervised', False),
                 'last_run': _workflow_last_run(wf),
             }
             for key, wf in WORKFLOWS.items()
@@ -906,6 +1015,23 @@ def run_workflow():
     mode = "headless" if headless else "visible browser"
     return jsonify({'success': True,
                     'message': f'Started {WORKFLOWS[key]["name"]} ({mode})'})
+
+
+@app.route('/api/workflows/run-ai', methods=['POST'])
+def run_workflow_ai():
+    """Start a workflow through the AI supervisor (self-heal + Excel + Slack)."""
+    if state.running:
+        return jsonify({'success': False, 'error': 'A task is already running'}), 409
+
+    data = request.json or {}
+    key = data.get('workflow', '')
+    if key not in WORKFLOWS:
+        return jsonify({'success': False, 'error': f'Unknown workflow: {key}'}), 400
+
+    start_supervised_workflow(key)
+    return jsonify({'success': True,
+                    'message': f'Started AI-supervised {WORKFLOWS[key]["name"]} '
+                               f'- full report will be posted to Slack'})
 
 
 @app.route('/api/run-schedule-now', methods=['POST'])

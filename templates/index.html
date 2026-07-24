@@ -575,6 +575,26 @@
         }
         .badge-ai svg { width: 12px; height: 12px; }
 
+        /* Run mode chooser (Normal vs With AI) in the schedule form */
+        .runmode-options { display: flex; gap: 10px; flex-wrap: wrap; }
+        .runmode-option {
+            flex: 1 1 220px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: border-color .15s, background .15s;
+        }
+        .runmode-option:hover { border-color: var(--accent); }
+        .runmode-option input { margin-top: 3px; }
+        .runmode-option:has(input:checked) {
+            border-color: var(--accent);
+            background: var(--accent-glow);
+        }
+
         /* "Run with AI" button */
         .btn-ai {
             background: linear-gradient(135deg, #7c3aed 0%, #2563eb 60%, #06b6d4 100%);
@@ -1833,6 +1853,29 @@
                         </div>
                     </div>
 
+                    <!-- Run mode: only shown when an AI-supervised workflow is selected -->
+                    <div class="form-group" id="schedule-runmode-group" style="display:none;">
+                        <label class="form-label">Run mode</label>
+                        <div class="runmode-options">
+                            <label class="runmode-option">
+                                <input type="radio" name="schedule-runmode" value="normal" checked>
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">Normal</span>
+                                    <span class="report-list-item-desc">Runs the workflow script directly.</span>
+                                </div>
+                            </label>
+                            <label class="runmode-option">
+                                <input type="radio" name="schedule-runmode" value="ai">
+                                <div class="report-list-item-text">
+                                    <span class="report-list-item-name">With AI
+                                        <span class="badge-ai" style="margin-left:6px;"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4L12 3z"/></svg>AI</span>
+                                    </span>
+                                    <span class="report-list-item-desc">Claude supervises the run: self-heals on failure, builds the Excel report, and posts a summary to Slack.</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
                     <!-- Schedule Settings -->
                     <div class="schedule-config-grid">
                         <div class="form-group" style="margin-bottom:0;">
@@ -2882,8 +2925,31 @@
             updateReportCount();
         }
 
+        // Show the Normal/With-AI chooser only when an AI-supervised workflow is selected.
+        function updateAiModeVisibility() {
+            const group = document.getElementById('schedule-runmode-group');
+            if (!group) return;
+            const selected = Array.from(getReportCheckboxes())
+                .filter(cb => cb.checked).map(cb => cb.value);
+            const showAi = selected.some(v => AI_WF_TASKS.has(v));
+            group.style.display = showAi ? '' : 'none';
+            if (!showAi) setScheduleRunMode('normal');  // reset when not applicable
+        }
+
+        function setScheduleRunMode(mode) {
+            const radio = document.querySelector(`input[name="schedule-runmode"][value="${mode === 'ai' ? 'ai' : 'normal'}"]`);
+            if (radio) radio.checked = true;
+        }
+
+        function getScheduleRunMode() {
+            const checked = document.querySelector('input[name="schedule-runmode"]:checked');
+            return checked ? checked.value : 'normal';
+        }
+
         // Names for workflow tasks, populated from /api/workflows.
         let WF_NAMES = {};
+        // Task values of AI-supervised workflows (e.g. "workflow:tiktok_toship").
+        let AI_WF_TASKS = new Set();
 
         async function loadScheduleWorkflows() {
             try {
@@ -2894,6 +2960,7 @@
                 container.querySelectorAll('.sched-wf-item').forEach(el => el.remove());
                 data.workflows.forEach(wf => {
                     WF_NAMES['workflow:' + wf.key] = wf.name;
+                    if (wf.ai_supervised) AI_WF_TASKS.add('workflow:' + wf.key);
                     const label = document.createElement('label');
                     label.className = 'report-list-item sched-wf-item';
                     label.innerHTML = `
@@ -2927,6 +2994,7 @@
             const boxes = getReportCheckboxes();
             const checked = Array.from(boxes).filter(cb => cb.checked).length;
             document.getElementById('sched-selected-count').textContent = `${checked} of ${boxes.length} selected`;
+            updateAiModeVisibility();
         }
 
         function toggleAllReports() {
@@ -2978,6 +3046,7 @@
             syncEnableToggleUI();
             // Reset checkboxes - uncheck all by default for new schedule
             getReportCheckboxes().forEach(cb => { cb.checked = false; });
+            setScheduleRunMode('normal');
             updateReportCount();
             // Reset form title
             document.getElementById('schedule-form-title').textContent = 'Add New Schedule';
@@ -3021,7 +3090,8 @@
                 document.getElementById('schedule-days-ago').value = s.run_for_days_ago || 1;
                 document.getElementById('schedule-enabled').checked = !!s.enabled;
                 syncEnableToggleUI();
-                setSelectedTask(s.task || 'all');
+                setSelectedTask(s.task || 'all');  // triggers updateAiModeVisibility()
+                setScheduleRunMode(s.run_mode || 'normal');
                 // Update form title to edit mode
                 document.getElementById('schedule-form-title').textContent = 'Edit Schedule';
                 document.getElementById('schedule-form-subtitle').textContent = `Editing: ${s.name}`;
@@ -3062,6 +3132,7 @@
                 start_date: document.getElementById('schedule-start').value,
                 task: task,
                 run_for_days_ago: parseInt(document.getElementById('schedule-days-ago').value),
+                run_mode: getScheduleRunMode(),
             };
             if (editId) schedule.edit_id = editId;
 
@@ -3105,7 +3176,7 @@
                 tbody.innerHTML = data.schedules.map(s => `
                     <tr>
                         <td><strong>${escapeHtml(s.name)}</strong></td>
-                        <td><div class="task-pills">${formatTaskDisplay(s.task)}</div></td>
+                        <td><div class="task-pills">${formatTaskDisplay(s.task)}${s.run_mode === 'ai' ? ' <span class="badge-ai" title="Runs through the AI supervisor: self-heals, builds the report, posts to Slack."><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15.5l-1.9-4.6L5.5 9l4.6-1.4L12 3z"/></svg>AI</span>' : ''}</div></td>
                         <td>${escapeHtml(s.recurrence)}</td>
                         <td>${escapeHtml(s.time_of_day)}</td>
                         <td>${escapeHtml(s.next_run || 'Not scheduled')}</td>

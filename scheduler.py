@@ -157,6 +157,7 @@ class ScheduleStore:
                     time_of_day TEXT NOT NULL,
                     start_date TEXT NOT NULL,
                     run_for_days_ago INTEGER NOT NULL DEFAULT 1,
+                    run_mode TEXT NOT NULL DEFAULT 'normal',
                     next_run TEXT,
                     last_run TEXT,
                     last_status TEXT,
@@ -170,6 +171,14 @@ class ScheduleStore:
             conn.execute(
                 """CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run)"""
             )
+            # Migration: add run_mode to databases created before it existed.
+            # 'normal' runs the plain script; 'ai' runs it through the Claude
+            # supervisor (self-heals, builds the report, posts to Slack).
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(schedules)")]
+            if "run_mode" not in cols:
+                conn.execute(
+                    "ALTER TABLE schedules ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'normal'"
+                )
 
     def upsert_schedule(
         self,
@@ -181,6 +190,7 @@ class ScheduleStore:
         time_of_day: str,
         start_date: str,
         run_for_days_ago: int = 1,
+        run_mode: str = "normal",
         enabled: bool = True,
     ) -> Dict:
         if recurrence not in RECURRENCE_CHOICES:
@@ -195,6 +205,7 @@ class ScheduleStore:
             "time_of_day": time_of_day,
             "start_date": start_date,
             "run_for_days_ago": max(0, int(run_for_days_ago)),
+            "run_mode": run_mode if run_mode in ("normal", "ai") else "normal",
             "next_run": _format_dt(next_run),
             "enabled": 1 if enabled else 0,
             "created_at": _format_dt(now),
@@ -202,8 +213,8 @@ class ScheduleStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO schedules (key, name, task, recurrence, time_of_day, start_date, run_for_days_ago, next_run, enabled, created_at)
-                VALUES (:key, :name, :task, :recurrence, :time_of_day, :start_date, :run_for_days_ago, :next_run, :enabled, :created_at)
+                INSERT INTO schedules (key, name, task, recurrence, time_of_day, start_date, run_for_days_ago, run_mode, next_run, enabled, created_at)
+                VALUES (:key, :name, :task, :recurrence, :time_of_day, :start_date, :run_for_days_ago, :run_mode, :next_run, :enabled, :created_at)
                 ON CONFLICT(key) DO UPDATE SET
                     name=excluded.name,
                     task=excluded.task,
@@ -211,6 +222,7 @@ class ScheduleStore:
                     time_of_day=excluded.time_of_day,
                     start_date=excluded.start_date,
                     run_for_days_ago=excluded.run_for_days_ago,
+                    run_mode=excluded.run_mode,
                     next_run=excluded.next_run,
                     enabled=excluded.enabled
                 """,

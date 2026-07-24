@@ -319,7 +319,13 @@ def on_schedule_due(schedule: dict) -> bool:
             return False
         if schedule_id:
             state.scheduler_store.mark_running(schedule_id, "Triggered automatically")
-        start_workflow(wf_key, headless=True, origin="scheduled", schedule_id=schedule_id)
+        # AI mode runs through the Claude supervisor (self-heals, builds the
+        # Excel report, posts to Slack); normal mode runs the plain script.
+        run_mode = (schedule.get("run_mode") or "normal").lower()
+        if run_mode == "ai" and WORKFLOWS[wf_key].get("ai_supervised"):
+            start_supervised_workflow(wf_key, origin="scheduled", schedule_id=schedule_id)
+        else:
+            start_workflow(wf_key, headless=True, origin="scheduled", schedule_id=schedule_id)
         return True
 
     # Start the scheduled job
@@ -531,7 +537,8 @@ def watch_supervised_output(proc: subprocess.Popen, task: str, date_str: str,
         on_task_complete(task, date_str, success)
 
 
-def start_supervised_workflow(key: str) -> None:
+def start_supervised_workflow(key: str, origin: str = "manual-ai",
+                              schedule_id: Optional[int] = None) -> None:
     """Run a workflow through the headless Claude supervisor (self-heals, builds
     the Excel report, and posts to Slack), streaming live progress to the dashboard."""
     wf = WORKFLOWS[key]
@@ -541,11 +548,12 @@ def start_supervised_workflow(key: str) -> None:
     state.stop_requested = False
     state.current_task = f"workflow:{key}"
     state.current_date_str = started_str
-    state.current_run_origin = "manual-ai"
-    state.current_schedule_id = None
+    state.current_run_origin = origin
+    state.current_schedule_id = schedule_id
     state._completion_in_progress = False
     state.last_log_path = None
-    state.current_log_path = start_log_file(f"{wf['name']} (AI)", started_str, "manual")
+    log_origin = "scheduled" if origin == "scheduled" else "manual"
+    state.current_log_path = start_log_file(f"{wf['name']} (AI)", started_str, log_origin)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_log = PROJECT_ROOT / "logs" / f"supervisor_{key}_{stamp}.log"
@@ -839,7 +847,14 @@ def save_schedule():
     task = data.get('task', 'all')
     enabled = data.get('enabled', False)
     days_ago = max(0, int(data.get('run_for_days_ago', 1)))
+    run_mode = (data.get('run_mode') or 'normal').lower()
     edit_id = data.get('edit_id')  # If editing an existing schedule
+
+    # AI mode only applies to AI-supervised workflows; ignore it otherwise.
+    if run_mode == 'ai':
+        wf_key = task.split(':', 1)[1] if task.startswith('workflow:') else None
+        if not (wf_key and WORKFLOWS.get(wf_key, {}).get('ai_supervised')):
+            run_mode = 'normal'
 
     if not name:
         return jsonify({'success': False, 'error': 'Schedule name is required.'}), 400
@@ -898,6 +913,7 @@ def save_schedule():
         time_of_day=time_val,
         start_date=start_val,
         run_for_days_ago=days_ago,
+        run_mode=run_mode,
         enabled=enabled,
     )
 

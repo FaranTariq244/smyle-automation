@@ -3,7 +3,7 @@ Smyle Automation Suite - Web Application
 Flask-based web interface replacing the Tkinter desktop GUI.
 
 Run with: python web_app.py
-Then open: http://localhost:5000
+Then open: http://localhost:5002
 """
 
 from __future__ import annotations
@@ -1440,7 +1440,7 @@ if __name__ == '__main__':
     # Initialize scheduler
     init_scheduler()
 
-    print("\nServer running at: http://localhost:5000")
+    print("\nServer running at: http://localhost:5002")
     print("Press Ctrl+C to stop\n")
 
     socketio.run(app, host='0.0.0.0', port=5002, debug=False, allow_unsafe_werkzeug=True)

@@ -14,9 +14,11 @@ dashboard/scheduler get an accurate result).
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 # Be robust to non-ASCII in logs (em-dashes etc.) even when the Windows console
@@ -206,6 +208,49 @@ def count_errors(run_log):
     return sum(1 for l in text.splitlines() if "[ERROR]" in l)
 
 
+def _issue_signature(line):
+    """Collapse a log line to a repeatable 'kind of problem' by stripping the
+    per-item noise (order refs, ids, retry counters) so identical problems
+    across many orders group into one counted category."""
+    msg = line
+    for tag in ("[ERROR]", "[WARNING]"):
+        if tag in msg:
+            msg = msg.split(tag, 1)[1]
+            break
+    msg = msg.strip()
+    msg = re.sub(r"#?SMYLE\d+", "#order", msg)               # Shopify order refs
+    msg = re.sub(r"\b\d{9,}\b", "<id>", msg)                  # long TikTok ids
+    msg = re.sub(r"\s*\(attempt \d+/\d+\)", "", msg)          # retry counters
+    msg = re.sub(r"\s*[—-]?\s*retrying in \d+s", "", msg)     # retry backoff
+    return re.sub(r"\s{2,}", " ", msg).strip()
+
+
+def summarize_issues(run_log, max_types=3):
+    """Return a short, human-readable breakdown of the errors and warnings in a
+    run log so the Slack report shows WHAT went wrong, not just a count.
+
+    Returns (error_bullets, warn_total, warn_bullets) where *_bullets are
+    Slack-ready lines like '   • 26× my-fulfilment.com unavailable (HTTP 500)'."""
+    text = Path(run_log).read_text(encoding="utf-8", errors="replace")
+    errs, warns = Counter(), Counter()
+    for l in text.splitlines():
+        if "[ERROR]" in l:
+            errs[_issue_signature(l)] += 1
+        elif "[WARNING]" in l:
+            warns[_issue_signature(l)] += 1
+
+    def bullets(counter, n):
+        out = []
+        for sig, cnt in counter.most_common(n):
+            if sig and len(sig) > 120:
+                sig = sig[:117] + "..."
+            if sig:
+                out.append(f"   • {cnt}× {sig}")
+        return out
+
+    return bullets(errs, max_types), sum(warns.values()), bullets(warns, max_types)
+
+
 def login_required(wf, run_log):
     """If the failure is an expired/missing login (not a code bug), return the
     help text to show the human; else None."""
@@ -279,7 +324,12 @@ def main():
                 if report_file:
                     lines.append(f":page_facing_up: Report saved: {report_file}")
                 if errs:
-                    lines.append(f":warning: {errs} error line(s) in the log — worth a glance")
+                    err_bullets, warn_total, warn_bullets = summarize_issues(run_log)
+                    lines.append(f":warning: {errs} error line(s) — top issues:")
+                    lines.extend(err_bullets)
+                    if warn_total:
+                        lines.append(f":grey_exclamation: {warn_total} warning(s), most common:")
+                        lines.extend(warn_bullets[:2])
                 lines.append(f"_Ran {start}–{end} · {'clean run' if not errs else 'completed with minor errors'}_")
                 send("\n".join(lines), ping=False)
             sys.exit(0)

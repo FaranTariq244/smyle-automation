@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import time
 import queue
 import threading
 import subprocess
-from datetime import datetime, timedelta
+import traceback
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+import requests
 from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
 
@@ -63,6 +67,7 @@ SETTINGS_KEYS = [
     "DAILY_ADD_TRACKER_SHEET_URL",
     "DATADS_SHEET_URL",
     "SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL",
+    "ORDER_EXPORT_SHEET_URL",
 ]
 
 # API keys stored with a "secret:" prefix so GET never returns the raw value
@@ -328,6 +333,19 @@ def on_schedule_due(schedule: dict) -> bool:
             start_workflow(wf_key, headless=True, origin="scheduled", schedule_id=schedule_id)
         return True
 
+    # The tracking sync derives its own rolling window from the saved config,
+    # so no report date logic applies here either.
+    if task.startswith("tracking_sync"):
+        sync_id = task.split(":", 1)[1] if ":" in task else "default"
+        cfg = get_sync_schedule(sync_id)
+        if cfg is None:
+            broadcast_log(f"Tracking sync '{sync_id}' no longer exists — skipping.\n")
+            return False
+        if schedule_id:
+            state.scheduler_store.mark_running(schedule_id, "Triggered automatically")
+        start_tracking_sync(cfg, origin="scheduled", schedule_id=schedule_id)
+        return True
+
     # Start the scheduled job
     days_ago = max(0, int(schedule.get("run_for_days_ago") or 1))
     target_date = datetime.combine(
@@ -366,6 +384,7 @@ def _task_display_name(task: str) -> str:
         wf = WORKFLOWS.get(task.split(":", 1)[1])
         return wf["name"] if wf else task
     labels = {
+        "tracking_sync": "Tracking Sync",
         "all": "All reports",
         "daily": "Daily Report",
         "order": "Order Type Report",
@@ -454,7 +473,9 @@ def start_workflow(key: str, headless: bool, origin: str = "manual",
     broadcast_status(f"{origin_label}: {wf['name']} ({mode})...", True)
     broadcast_log(f"\n{'=' * 80}\n{origin_label} - Workflow: {wf['name']} ({mode} browser)\n{'=' * 80}\n")
 
-    cmd = [sys.executable, "-u", str(PROJECT_ROOT / wf["script"])]
+    # Workflows may declare fixed CLI args; omitting the key keeps the old
+    # bare-script behaviour.
+    cmd = [sys.executable, "-u", str(PROJECT_ROOT / wf["script"])] + list(wf.get("args", []))
     env = build_subprocess_env()
     env["HEADLESS_MODE"] = "1" if headless else "0"
     try:
@@ -988,6 +1009,828 @@ def run_task():
     start_task_with_date(task, date_obj, formatted_date, origin="manual", headless=headless)
 
     return jsonify({'success': True, 'message': f'Started {task} for {formatted_date}'})
+
+
+# ============================================================================
+# Order Explorer — interactive lookup tool (read-only)
+# ============================================================================
+
+# Fetching portal detail costs one HTTP request per order, so an unbounded
+# range with "check portal" on could run for an hour. Cap it and say so.
+PORTAL_ENRICH_MAX = 150
+
+# Bulk pushes run in the background in chunks. No hard cap on the total — a
+# week's backlog is a legitimate thing to push — but the work is paced so a
+# large run can't exhaust Shopify's cost bucket or block the request thread.
+BULK_CHUNK = 25          # orders per chunk
+BULK_CHUNK_PAUSE = 1.0   # seconds between chunks once a run is large
+BULK_PACE_AFTER = 100    # runs above this size get the inter-chunk pause
+
+# In-memory progress for the running bulk push, polled by the Orders page.
+bulk_push_state: Dict[str, Any] = {
+    "running": False, "done": 0, "total": 0, "written": 0,
+    "failed": 0, "skipped": 0, "message": "", "results": [], "finished": False,
+}
+_bulk_lock = threading.Lock()
+
+
+@app.route('/api/orders/lookup', methods=['POST'])
+def api_orders_lookup():
+    """Fetch orders for the Order Explorer. Never writes to any system."""
+    body = request.get_json(silent=True) or {}
+    import order_lookup as ol
+
+    try:
+        if body.get('reference'):
+            ref = str(body['reference']).strip()
+            ref = ref if ref.startswith('#') else f'#{ref}'
+            source = body.get('source') or 'both'
+
+            shop_row = ol.shopify_order(ref) if source in ('both', 'shopify') else None
+            portal_row = None
+            if source in ('both', 'fulfilment'):
+                portal_row = _portal_order_resilient(ref)
+
+            if shop_row is None and portal_row is None:
+                return jsonify({'success': False,
+                                'error': f'{ref} not found in either system'}), 404
+            merged = {**(shop_row or {'order': ref}), **(portal_row or {})}
+            merged.pop('_node', None)
+            return jsonify({'success': True, 'rows': [merged],
+                            'summary': _orders_summary([merged]),
+                            'sync': _tracking_sync_plan(ref, shop_row, portal_row)})
+
+        date_from, date_to = body.get('date_from'), body.get('date_to')
+        if not date_from or not date_to:
+            return jsonify({'success': False,
+                            'error': 'Pick a start and end date.'}), 400
+
+        source = body.get('source') or 'shopify'
+        pushable_only = bool(body.get('pushable_only'))
+        notes = []
+
+        if source == 'fulfilment':
+            rows = ol.portal_orders_fast(date_from, date_to)
+
+        elif source == 'both' or body.get('with_portal'):
+            # Bulk on BOTH sides, then merge in memory — no per-order lookups.
+            portal = ol.portal_orders_fast(date_from, date_to,
+                                           only_status=ol.DETAIL_STATUS)
+            by_ref = {p['order']: p for p in portal}
+
+            if pushable_only:
+                # Only orders the portal can actually contribute a number for
+                # are worth asking Shopify about. This makes the filter SAVE
+                # work instead of just hiding rows after the fact.
+                names = [ref for ref, p in by_ref.items() if p.get('portal_tracking')]
+                notes.append(f'{len(names)} of {len(portal)} completed orders carry '
+                             f'a T&T code — only those were looked up in Shopify.')
+                rows = _shopify_rows_by_name(names)
+                # The portal also holds Amazon/Kaufland references that will
+                # never match a Shopify order. Say how many dropped out rather
+                # than letting the row count quietly shrink.
+                unmatched = len(names) - len(rows)
+                if unmatched > 0:
+                    notes.append(f'{unmatched} of those have no Shopify order '
+                                 f'(other sales channels, e.g. AMZ-*).')
+            else:
+                rows = ol.shopify_orders(date_from, date_to,
+                                         limit=body.get('limit') or None)
+
+            missing = 0
+            for row in rows:
+                match = by_ref.get(row['order'])
+                if match:
+                    row.update({k: v for k, v in match.items() if k != 'order'})
+                else:
+                    row['portal_status'] = 'not in my-fulfilment.com'
+                    missing += 1
+                _attach_row_sync(row)
+            if missing:
+                notes.append(f'{missing} Shopify order(s) had no completed match '
+                             f'in my-fulfilment.com for this window.')
+        else:
+            rows = ol.shopify_orders(date_from, date_to, limit=body.get('limit') or None)
+
+        if body.get('untracked_only'):
+            rows = [r for r in rows if r.get('has_tracking', 'no') == 'no']
+        if body.get('unfulfilled_only'):
+            rows = [r for r in rows if r.get('fulfillment') != 'FULFILLED']
+        if pushable_only:
+            rows = [r for r in rows if r.get('can_push')]
+
+        rows = [{k: v for k, v in r.items() if not k.startswith('_')} for r in rows]
+        return jsonify({'success': True, 'rows': rows,
+                        'summary': _orders_summary(rows), 'notes': notes})
+
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': _friendly_error(exc)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Tracking-sync schedules
+# ---------------------------------------------------------------------------
+# A LIST of independent schedules, each with its own window, times and mode —
+# so you can run "today + yesterday, apply and email" hourly while a separate
+# one sweeps older days that the first deliberately skips.
+#
+# Each schedule expands to one scheduler row per run time, keyed
+# tracking_sync@<id>@<HH:MM>, with task "tracking_sync:<id>" so the dispatcher
+# knows which config to load.
+TRACKING_SYNC_SETTING = "TRACKING_SYNC_SCHEDULES"
+LEGACY_SYNC_SETTING = "TRACKING_SYNC_CONFIG"
+TRACKING_SYNC_KEY_PREFIX = "tracking_sync@"
+
+TRACKING_SYNC_DEFAULTS = {
+    "name": "Recent orders",
+    "enabled": False,
+    "days_back": 2,        # window size in days
+    "skip_days": 0,        # recent days to exclude (0 = window ends today)
+    "times": ["08:00"],
+    "apply": False,        # False = dry run, report only
+    "notify_customer": True,
+}
+
+
+def window_for(cfg: Dict[str, Any]) -> tuple:
+    """(from, to) dates this config resolves to right now."""
+    end = date.today() - timedelta(days=max(0, int(cfg.get("skip_days") or 0)))
+    start = end - timedelta(days=max(0, int(cfg.get("days_back") or 1) - 1))
+    return start.isoformat(), end.isoformat()
+
+
+def get_tracking_sync_schedules() -> list:
+    """All configured sync schedules, migrating the old single config if found."""
+    raw = get_setting(TRACKING_SYNC_SETTING)
+    if raw:
+        try:
+            items = json.loads(raw)
+            if isinstance(items, list):
+                return [{**TRACKING_SYNC_DEFAULTS, **i} for i in items]
+        except (ValueError, TypeError):
+            print(f"{TRACKING_SYNC_SETTING} is not valid JSON — ignoring")
+
+    legacy = get_setting(LEGACY_SYNC_SETTING)
+    if legacy:
+        try:
+            cfg = {**TRACKING_SYNC_DEFAULTS, **json.loads(legacy)}
+            cfg.setdefault("id", "default")
+            return [cfg]
+        except (ValueError, TypeError):
+            pass
+    return []
+
+
+def _validate_schedule(cfg: Dict[str, Any], index: int) -> Dict[str, Any]:
+    where = cfg.get("name") or f"schedule {index + 1}"
+
+    times = sorted({str(t).strip() for t in (cfg.get("times") or []) if str(t).strip()})
+    if not times:
+        raise ValueError(f"{where}: add at least one run time")
+    for t in times:
+        hh, _, mm = t.partition(":")
+        if not (hh.isdigit() and mm.isdigit() and 0 <= int(hh) < 24 and 0 <= int(mm) < 60):
+            raise ValueError(f"{where}: '{t}' is not a valid HH:MM time")
+
+    def whole(field, lo, hi, label):
+        try:
+            v = int(cfg.get(field))
+        except (TypeError, ValueError):
+            raise ValueError(f"{where}: {label} must be a whole number")
+        if not lo <= v <= hi:
+            raise ValueError(f"{where}: {label} must be between {lo} and {hi}")
+        return v
+
+    days_back = whole("days_back", 1, 90, "days back")
+    skip_days = whole("skip_days", 0, 90, "days to skip") if cfg.get("skip_days") else 0
+
+    return {
+        "id": str(cfg.get("id") or "").strip() or f"s{index + 1}",
+        "name": (cfg.get("name") or "").strip() or f"Schedule {index + 1}",
+        "enabled": bool(cfg.get("enabled")),
+        "days_back": days_back,
+        "skip_days": skip_days,
+        "times": times,
+        "apply": bool(cfg.get("apply")),
+        "notify_customer": bool(cfg.get("notify_customer", True)),
+    }
+
+
+def save_tracking_sync_schedules(items: list) -> list:
+    """Persist all schedules and rebuild the scheduler rows they expand to."""
+    if not isinstance(items, list):
+        raise ValueError("Expected a list of schedules")
+
+    clean = [_validate_schedule(c, i) for i, c in enumerate(items)]
+
+    ids = [c["id"] for c in clean]
+    if len(set(ids)) != len(ids):
+        raise ValueError("Two schedules share the same id")
+
+    set_setting(TRACKING_SYNC_SETTING, json.dumps(clean))
+
+    wanted = {f"{TRACKING_SYNC_KEY_PREFIX}{c['id']}@{t}" for c in clean for t in c["times"]}
+    for row in state.scheduler_store.list_schedules():
+        key = row.get("key") or ""
+        if key.startswith(TRACKING_SYNC_KEY_PREFIX) and key not in wanted:
+            state.scheduler_store.delete_schedule(row["id"])
+
+    for cfg in clean:
+        mode = "apply" if cfg["apply"] else "dry run"
+        span = (f"{cfg['days_back']}d" if not cfg["skip_days"]
+                else f"{cfg['days_back']}d skipping {cfg['skip_days']}")
+        for t in cfg["times"]:
+            state.scheduler_store.upsert_schedule(
+                key=f"{TRACKING_SYNC_KEY_PREFIX}{cfg['id']}@{t}",
+                name=f"{cfg['name']} {t} ({span}, {mode})",
+                task=f"tracking_sync:{cfg['id']}",
+                recurrence="daily",
+                time_of_day=t,
+                start_date=datetime.now().strftime("%Y-%m-%d"),
+                run_for_days_ago=cfg["skip_days"] + cfg["days_back"] - 1,
+                enabled=cfg["enabled"],
+            )
+    return clean
+
+
+def get_sync_schedule(schedule_id: str) -> Optional[Dict[str, Any]]:
+    for cfg in get_tracking_sync_schedules():
+        if str(cfg.get("id")) == str(schedule_id):
+            return cfg
+    return None
+
+
+def tracking_sync_command(cfg: Dict[str, Any]) -> list:
+    """CLI args for a scheduled tracking-sync run."""
+    args = ["--days-back", str(cfg["days_back"])]
+    if cfg.get("skip_days"):
+        args += ["--skip-days", str(cfg["skip_days"])]
+    if cfg.get("apply"):
+        args.append("--apply")
+        if cfg.get("notify_customer", True):
+            args.append("--notify")
+    return args
+
+
+def start_tracking_sync(cfg: Dict[str, Any], origin: str = "scheduled",
+                        schedule_id: Optional[int] = None) -> None:
+    """Run the tracking sync as a subprocess, streaming output like a workflow."""
+    started_str = datetime.now().strftime("%d-%b-%Y %H:%M")
+    mode = "APPLY" if cfg.get("apply") else "DRY RUN"
+    win_from, win_to = window_for(cfg)
+    label = cfg.get("name") or "Tracking Sync"
+
+    state.running = True
+    state.stop_requested = False
+    state.current_task = "tracking_sync"
+    state.current_date_str = started_str
+    state.current_run_origin = origin
+    state.current_schedule_id = schedule_id
+    state._completion_in_progress = False
+    state.last_log_path = None
+    state.current_log_path = start_log_file(f"Tracking Sync {label}", started_str, origin)
+
+    broadcast_status(f"{label} ({mode}, {win_from} to {win_to})...", True)
+    broadcast_log(f"\n{'=' * 80}\nTracking Sync — {label}\n{mode} · window {win_from} "
+                  f"to {win_to} ({cfg['days_back']} day(s)"
+                  + (f", skipping the last {cfg['skip_days']}" if cfg.get("skip_days") else "")
+                  + f")\n{'=' * 80}\n")
+
+    cmd = [sys.executable, "-u", str(PROJECT_ROOT / "sync_tracking_to_shopify.py")]
+    cmd += tracking_sync_command(cfg)
+    env = build_subprocess_env()
+    if origin == "scheduled":
+        env["SCHEDULED_RUN"] = "1"      # tags its writes in the audit log
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            env=env,
+        )
+        state.current_process = proc
+        state.current_pid = proc.pid
+    except Exception as exc:
+        broadcast_log(f"\nFailed to start tracking sync: {exc}\n")
+        broadcast_status("Failed to start tracking sync", False)
+        state.running = False
+        return
+
+    threading.Thread(
+        target=watch_process_output, args=(proc, "tracking_sync", started_str),
+        daemon=True,
+    ).start()
+
+
+def _friendly_error(exc: Exception) -> str:
+    """Turn an exception into something actionable for whoever clicked Fetch."""
+    text = str(exc)
+    low = text.lower()
+
+    if 'throttl' in low:
+        return ('Shopify rate-limited this query repeatedly. Try a shorter date '
+                'range, or wait a minute and retry.')
+    if 'credentials not configured' in low or 'not configured' in low:
+        return text        # already tells you exactly which setting is missing
+    if 'login failed' in low or 'session expired' in low:
+        return ('Could not sign in to my-fulfilment.com. Check MYFULFILMENT_EMAIL / '
+                'MYFULFILMENT_PASSWORD in fulfilment.env.')
+    if any(code in text for code in ('500', '502', '503', '504')):
+        return ('my-fulfilment.com returned a server error and did not recover '
+                'after retries. It is usually transient — try again shortly.')
+    if 'did not respond in time while searching' in text:
+        return text        # already explains the cause and the way round it
+    if 'timed out' in low or 'timeout' in low:
+        return ('my-fulfilment.com timed out. Its search gets slow when their '
+                'server is busy — try again shortly, or use a shorter date range.')
+    if 'connection' in low:
+        return f'Network problem reaching an upstream system: {text[:160]}'
+    return text[:400]
+
+
+# How the carrier name is written into Shopify:
+#   "auto"  — the detected PostNL Domestic / International name. Shopify keeps
+#             updating shipment_status (in transit / delivered) for carriers it
+#             integrates with, which it will NOT do for a custom name.
+#   "other" — the literal "Other". Use when the detected name would be wrong;
+#             the tracking URL still makes the number clickable.
+CARRIER_MODE_SETTING = "TRACKING_CARRIER_MODE"
+
+
+def _carrier_for_row(portal_row, state, shop_row) -> Optional[str]:
+    """Carrier string to write, honouring the configured mode."""
+    if (get_setting(CARRIER_MODE_SETTING) or "auto").lower() == "other":
+        return shopify_fulfil_other()
+    from services.shopify import fulfillment as shopify_fulfil
+    return shopify_fulfil.carrier_for(
+        (portal_row or {}).get('shipper', ''),
+        (state or {}).get('country_code') or (shop_row or {}).get('country'))
+
+
+def shopify_fulfil_other() -> str:
+    from services.shopify import fulfillment as shopify_fulfil
+    return shopify_fulfil.OTHER_CARRIER
+
+
+def _portal_order_resilient(ref: str, attempts: int = 2):
+    """Single-order portal lookup that survives a slow reference search.
+
+    The portal's reference filter is an unindexed substring scan — usually
+    ~7s, but it can blow past a 3-minute timeout when their server is cold or
+    busy. A cache hit skips it entirely; otherwise we use a shorter timeout and
+    retry once rather than making the user wait 180s for a single failure.
+    """
+    import order_lookup as ol
+    from services.fulfilment import client as myf
+
+    last = None
+    for attempt in range(attempts):
+        try:
+            # 75s per attempt instead of 180 — a search that slow won't get
+            # faster by waiting, and a retry often lands on a warm cache.
+            with myf.MyFulfilmentClient(timeout=75) as c:
+                c.login()
+                return ol.portal_order(c, ref)
+        except requests.RequestException as exc:
+            last = exc
+            print(f"Portal lookup for {ref} failed ({type(exc).__name__}) — "
+                  f"attempt {attempt + 1}/{attempts}")
+            if attempt < attempts - 1:
+                time.sleep(2)
+    raise RuntimeError(
+        f"my-fulfilment.com did not respond in time while searching for {ref}. "
+        "Its reference search is slow when the server is busy — try again in a "
+        "moment, or run a date-range lookup for that day, which uses a much "
+        "faster query and caches the result."
+    ) from last
+
+
+def _shopify_rows_by_name(names: list) -> list:
+    """Fetch specific Shopify orders in parallel batches, newest first."""
+    import order_lookup as ol
+    from services.shopify import bulk
+
+    nodes = bulk.fetch_by_names(names, ol._ORDER_FIELDS)
+    rows = [ol._shopify_row(n) for n in nodes.values()]
+    rows.sort(key=lambda r: r['created'], reverse=True)
+    return rows
+
+
+def _attach_row_sync(row: Dict[str, Any]) -> None:
+    """Decide, in place, whether a listed row's portal tracking can be pushed.
+
+    Uses the order node already fetched in the listing, so this costs no extra
+    Shopify calls no matter how many rows there are.
+    """
+    row['can_push'] = False
+    row['sync_action'] = ''
+    node = row.get('_node')
+    tnt = (row.get('portal_tracking') or '').split(',')[0].strip()
+    if not node or not tnt:
+        row['sync_reason'] = ('no track & trace code in my-fulfilment.com'
+                              if node else 'no Shopify order')
+        return
+    try:
+        from services.shopify import fulfillment as shopify_fulfil
+        from sync_tracking_to_shopify import _decide
+
+        state = shopify_fulfil.state_from_node(node)
+        action, reason, _target = _decide(state, tnt)
+        row['can_push'] = action in ('create', 'update')
+        row['sync_action'] = action
+        row['sync_reason'] = reason
+        row['sync_carrier'] = _carrier_for_row(row, state, row)
+        row['sync_url'] = shopify_fulfil.normalize_tracking_url(row.get('tracking_url'))
+    except Exception as exc:
+        row['sync_reason'] = f'could not evaluate: {exc}'
+
+
+@app.route('/api/orders/sync-schedule', methods=['GET'])
+def api_get_sync_schedule():
+    """All tracking-sync schedules, each with the rows it produced."""
+    configs = get_tracking_sync_schedules()
+    rows_by_id: Dict[str, list] = {}
+    for r in state.scheduler_store.list_schedules():
+        key = r.get('key') or ''
+        if not key.startswith(TRACKING_SYNC_KEY_PREFIX):
+            continue
+        ident, _, time_of_day = key[len(TRACKING_SYNC_KEY_PREFIX):].partition('@')
+        rows_by_id.setdefault(ident, []).append({
+            'time': time_of_day, 'next_run': r.get('next_run'),
+            'last_run': r.get('last_run'), 'last_status': r.get('last_status'),
+            'enabled': bool(r.get('enabled')),
+        })
+
+    out = []
+    for cfg in configs:
+        win_from, win_to = window_for(cfg)
+        out.append({**cfg,
+                    'window': {'from': win_from, 'to': win_to},
+                    'rows': sorted(rows_by_id.get(cfg['id'], []), key=lambda r: r['time'])})
+    return jsonify({'success': True, 'schedules': out,
+                    'defaults': TRACKING_SYNC_DEFAULTS})
+
+
+@app.route('/api/orders/sync-schedule', methods=['POST'])
+def api_save_sync_schedule():
+    """Replace the full set of schedules and rebuild their scheduler rows."""
+    body = request.get_json(silent=True) or {}
+    items = body.get('schedules')
+    if items is None:
+        return jsonify({'success': False, 'error': 'No schedules supplied.'}), 400
+    try:
+        clean = save_tracking_sync_schedules(items)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': _friendly_error(exc)}), 500
+
+    runs = sum(len(c['times']) for c in clean)
+    live = sum(len(c['times']) for c in clean if c['enabled'])
+    return jsonify({
+        'success': True,
+        'schedules': clean,
+        'message': (f"Saved {len(clean)} schedule(s), {runs} run(s) per day "
+                    f"({live} enabled)"),
+    })
+
+
+@app.route('/api/orders/sync-schedule/run-now', methods=['POST'])
+def api_run_sync_now():
+    """Run one saved schedule immediately."""
+    if state.running:
+        return jsonify({'success': False,
+                        'error': 'Another run is already in progress.'}), 409
+
+    body = request.get_json(silent=True) or {}
+    cfg = get_sync_schedule(body.get('id')) if body.get('id') else None
+    if cfg is None:
+        return jsonify({'success': False,
+                        'error': 'Save the schedule first, then run it.'}), 404
+
+    # An ad-hoc run can force a dry run without touching the saved config.
+    if 'apply' in body:
+        cfg = {**cfg, 'apply': bool(body['apply'])}
+    start_tracking_sync(cfg, origin="manual")
+    win_from, win_to = window_for(cfg)
+    mode = 'APPLY' if cfg['apply'] else 'DRY RUN'
+    return jsonify({'success': True,
+                    'message': f"Started {cfg['name']} ({mode}, {win_from} to {win_to})"})
+
+
+@app.route('/api/orders/push-tracking-bulk', methods=['POST'])
+def api_orders_push_tracking_bulk():
+    """Start a bulk push. Returns immediately; the work runs in the background.
+
+    There is no cap on how many orders you can push — a week's backlog is a
+    legitimate thing to clear. Instead the run is chunked and paced, and it is
+    detached from the HTTP request so it can't be cut short by a timeout.
+    """
+    body = request.get_json(silent=True) or {}
+    refs = [str(r).strip() for r in (body.get('references') or []) if str(r).strip()]
+    if not refs:
+        return jsonify({'success': False, 'error': 'No orders selected.'}), 400
+
+    with _bulk_lock:
+        if bulk_push_state['running']:
+            return jsonify({'success': False,
+                            'error': 'A bulk push is already running.'}), 409
+        bulk_push_state.update({
+            'running': True, 'done': 0, 'total': len(refs), 'written': 0,
+            'failed': 0, 'skipped': 0, 'finished': False, 'results': [],
+            'message': f'Starting - {len(refs)} order(s)',
+        })
+
+    notify = True if 'notify_customer' not in body else bool(body['notify_customer'])
+    threading.Thread(target=_bulk_push_worker, args=(refs, notify), daemon=True).start()
+
+    return jsonify({
+        'success': True, 'started': True, 'total': len(refs), 'notified': notify,
+        'message': f'Pushing {len(refs)} order(s) in the background'
+                   + (' - customers will be emailed' if notify else ' - no emails'),
+    })
+
+
+def _bulk_push_worker(refs: list, notify: bool) -> None:
+    """Push tracking for any number of orders, in paced chunks.
+
+    Each order is still re-derived from both systems before writing - the
+    browser only ever supplies references. Before every chunk we wait for
+    Shopify's cost bucket to refill if it has been drawn down, so a long run
+    stays inside the rate limit instead of sprinting into a THROTTLED error.
+    """
+    import order_lookup as ol
+    from services.fulfilment import client as myf
+    from services.shopify import audit, client as shopify_client
+    from services.shopify import fulfillment as shopify_fulfil
+
+    audit.set_origin('ui-bulk')
+    total = len(refs)
+    paced = total > BULK_PACE_AFTER
+    broadcast_log(f"\nPushing tracking for {total} order(s), notify_customer={notify}"
+                  + (f" - paced in chunks of {BULK_CHUNK}\n" if paced else "\n"))
+
+    try:
+        with myf.MyFulfilmentClient() as portal:
+            portal.login()
+
+            for start in range(0, total, BULK_CHUNK):
+                chunk = refs[start:start + BULK_CHUNK]
+
+                waited = shopify_client.wait_for_capacity()
+                if waited:
+                    broadcast_log(f"  paused {waited:.1f}s for the Shopify rate limit\n")
+
+                for ref in chunk:
+                    ref = ref if ref.startswith('#') else f'#{ref}'
+                    try:
+                        shop_row = ol.shopify_order(ref)
+                        portal_row = ol.portal_order(portal, ref)
+                        plan = _tracking_sync_plan(ref, shop_row, portal_row)
+
+                        if not plan or not plan.get('can_push'):
+                            _bulk_record(ref, False,
+                                         (plan or {}).get('reason', 'nothing to push'),
+                                         skipped=True)
+                            continue
+
+                        writer = (shopify_fulfil.create_fulfillment
+                                  if plan['action'] == 'create'
+                                  else shopify_fulfil.update_tracking)
+                        res = writer(plan['target'], plan['tracking'],
+                                     tracking_company=plan['carrier'],
+                                     tracking_url=plan.get('tracking_url'),
+                                     notify_customer=notify)
+                        _bulk_record(ref, True,
+                                     f"{plan['tracking']} -> {res.get('name', '')}")
+                    except Exception as exc:
+                        _bulk_record(ref, False, str(exc))
+
+                if paced and start + BULK_CHUNK < total:
+                    time.sleep(BULK_CHUNK_PAUSE)
+
+        s = bulk_push_state
+        summary = (f"{s['written']} written, {s['skipped']} skipped, "
+                   f"{s['failed']} failed of {total}")
+        broadcast_log(f"Bulk push done - {summary}\n")
+        with _bulk_lock:
+            bulk_push_state.update({'running': False, 'finished': True,
+                                    'message': summary})
+    except Exception as exc:
+        traceback.print_exc()
+        broadcast_log(f"Bulk push aborted - {exc}\n")
+        with _bulk_lock:
+            bulk_push_state.update({'running': False, 'finished': True,
+                                    'message': f'Aborted: {_friendly_error(exc)}'})
+
+
+def _bulk_record(ref: str, ok: bool, message: str, skipped: bool = False) -> None:
+    with _bulk_lock:
+        bulk_push_state['done'] += 1
+        if ok:
+            bulk_push_state['written'] += 1
+        elif skipped:
+            bulk_push_state['skipped'] += 1
+        else:
+            bulk_push_state['failed'] += 1
+        # Keep only the tail - a multi-thousand run shouldn't grow unbounded.
+        bulk_push_state['results'] = (bulk_push_state['results']
+                                      + [{'order': ref, 'ok': ok, 'message': message}])[-200:]
+        s = bulk_push_state
+        s['message'] = (f"{s['done']}/{s['total']} - {s['written']} written, "
+                        f"{s['skipped']} skipped, {s['failed']} failed")
+    label = 'OK ' if ok else ('skipped - ' if skipped else 'FAILED - ')
+    broadcast_log(f"  {ref}: {label}{message}\n")
+
+
+@app.route('/api/orders/write-log', methods=['GET'])
+def api_write_log():
+    """Every write this project has made to Shopify, newest first."""
+    from services.shopify import audit
+    return jsonify({
+        'success': True,
+        'summary': audit.summary(),
+        'entries': audit.recent(
+            limit=int(request.args.get('limit', 100)),
+            order_name=request.args.get('order', ''),
+            since=request.args.get('since', ''),
+            failures_only=request.args.get('failures') == '1',
+        ),
+    })
+
+
+@app.route('/api/orders/push-tracking-bulk/status', methods=['GET'])
+def api_bulk_push_status():
+    """Progress of the running (or last) bulk push."""
+    with _bulk_lock:
+        return jsonify({'success': True, **bulk_push_state})
+
+
+def _tracking_sync_plan(reference: str, shop_row, portal_row) -> Optional[Dict[str, Any]]:
+    """Work out whether this order's portal tracking can be pushed to Shopify.
+
+    Returns None unless BOTH systems were queried and returned the order — the
+    button is only meaningful when we have the two sides to compare. Otherwise
+    returns the decision so the UI can show (or hide) the push button, with the
+    exact values that would be written.
+    """
+    if shop_row is None or portal_row is None:
+        return None
+
+    tnt = (portal_row.get('portal_tracking') or '').split(',')[0].strip()
+    if not tnt:
+        return {'can_push': False,
+                'reason': 'my-fulfilment.com has no track & trace code for this order.'}
+
+    try:
+        from services.shopify import fulfillment as shopify_fulfil
+        from sync_tracking_to_shopify import _decide
+
+        state = shopify_fulfil.get_order_state(reference)
+        action, reason, target = _decide(state, tnt)
+        carrier = _carrier_for_row(portal_row, state, shop_row)
+        url = shopify_fulfil.normalize_tracking_url(portal_row.get('tracking_url'))
+
+        return {
+            'can_push': action in ('create', 'update'),
+            'action': action,
+            'reason': reason,
+            'tracking': tnt,
+            'carrier': carrier,
+            'tracking_url': url,
+            'target': target,
+            # What the write would actually do, in plain words.
+            'effect': ('Create a fulfilment in Shopify carrying this tracking number'
+                       if action == 'create' else
+                       'Add this tracking number to the existing Shopify fulfilment'
+                       if action == 'update' else reason),
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        return {'can_push': False, 'reason': f'Could not evaluate: {exc}'}
+
+
+@app.route('/api/orders/push-tracking', methods=['POST'])
+def api_orders_push_tracking():
+    """Write one order's my-fulfilment.com tracking number into Shopify.
+
+    This is the only endpoint in the tool that writes to Shopify. Everything is
+    re-derived server-side from both systems — the browser only supplies the
+    order reference — so a stale or tampered page can't cause a wrong write.
+    """
+    body = request.get_json(silent=True) or {}
+    ref = str(body.get('reference') or '').strip()
+    if not ref:
+        return jsonify({'success': False, 'error': 'No order reference given.'}), 400
+    ref = ref if ref.startswith('#') else f'#{ref}'
+    # Notifying the customer is the POINT of adding tracking — a tracking number
+    # nobody is told about is worthless. Default ON; only an explicit false
+    # from the caller turns it off.
+    notify = True if 'notify_customer' not in body else bool(body['notify_customer'])
+
+    try:
+        import order_lookup as ol
+        from services.fulfilment import client as myf
+        from services.shopify import audit, fulfillment as shopify_fulfil
+
+        audit.set_origin('ui-single')
+        shop_row = ol.shopify_order(ref)
+        if shop_row is None:
+            return jsonify({'success': False,
+                            'error': f'{ref} not found in Shopify.'}), 404
+
+        with myf.MyFulfilmentClient() as c:
+            c.login()
+            portal_row = ol.portal_order(c, ref)
+        if portal_row is None:
+            return jsonify({'success': False,
+                            'error': f'{ref} not found in my-fulfilment.com.'}), 404
+
+        plan = _tracking_sync_plan(ref, shop_row, portal_row)
+        if not plan or not plan.get('can_push'):
+            return jsonify({'success': False,
+                            'error': (plan or {}).get('reason', 'Nothing to push.')}), 409
+
+        if plan['action'] == 'create':
+            result = shopify_fulfil.create_fulfillment(
+                plan['target'], plan['tracking'],
+                tracking_company=plan['carrier'], tracking_url=plan.get('tracking_url'),
+                notify_customer=notify)
+        else:
+            result = shopify_fulfil.update_tracking(
+                plan['target'], plan['tracking'],
+                tracking_company=plan['carrier'], tracking_url=plan.get('tracking_url'),
+                notify_customer=notify)
+
+        broadcast_log(
+            f"\nPushed tracking {plan['tracking']} ({plan['carrier'] or 'no carrier'}) "
+            f"to {ref} — {plan['action']}, notify_customer={notify}\n")
+
+        return jsonify({
+            'success': True,
+            'message': f"{ref}: tracking {plan['tracking']} written to Shopify "
+                       f"({result.get('name', '')}) — "
+                       + ("customer emailed" if notify else "NO email sent"),
+            'notified': notify,
+            'fulfillment': result,
+        })
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+def _orders_summary(rows: list) -> Dict[str, Any]:
+    tracked = sum(1 for r in rows if r.get('has_tracking') == 'yes')
+    fulfilled = sum(1 for r in rows if r.get('fulfillment') == 'FULFILLED')
+    gaps = sum(1 for r in rows
+               if r.get('portal_tracking') and r.get('has_tracking') == 'no')
+    return {'total': len(rows), 'fulfilled': fulfilled,
+            'tracked': tracked, 'gaps': gaps}
+
+
+@app.route('/api/orders/export', methods=['POST'])
+def api_orders_export():
+    """Export the rows already on screen — as a CSV download or to Sheets."""
+    body = request.get_json(silent=True) or {}
+    rows = body.get('rows') or []
+    if not rows:
+        return jsonify({'success': False, 'error': 'Nothing to export.'}), 400
+
+    target = body.get('target', 'csv')
+    try:
+        if target == 'sheet':
+            from services.sheets import order_export
+            tab = body.get('tab') or 'orders'
+            url = order_export.export_orders(rows, tab)
+            return jsonify({'success': True, 'url': url,
+                            'message': f'Wrote {len(rows)} rows to tab "{tab}"'})
+
+        # CSV: stream it back as a download.
+        import csv as _csv
+        import io as _io
+        from flask import Response
+
+        # Rows arrive as JSON, which loses dict ordering — so drive the column
+        # order from the export schema and append anything unexpected at the end.
+        from services.sheets.order_export import COLUMNS as SCHEMA
+        present = {k for r in rows for k in r}
+        columns = [c for c in SCHEMA if c in present]
+        columns += [k for k in sorted(present) if k not in SCHEMA]
+        buf = _io.StringIO()
+        writer = _csv.DictWriter(buf, fieldnames=columns, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(rows)
+
+        filename = body.get('filename') or 'orders.csv'
+        return Response(
+            '﻿' + buf.getvalue(),   # BOM so Excel opens UTF-8 correctly
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 @app.route('/api/workflows', methods=['GET'])

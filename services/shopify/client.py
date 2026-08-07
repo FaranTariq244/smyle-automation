@@ -115,22 +115,112 @@ def _request_with_retry(method: str, url: str, max_retries: int = 5, **kwargs) -
     return resp  # unreachable, but keeps type checker happy
 
 
-def graphql(query: str, variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+# Last reported leaky-bucket state, so bulk callers can pace themselves before
+# Shopify has to push back. Updated on every GraphQL response.
+_last_throttle: Dict[str, Any] = {}
+
+
+def throttle_status() -> Dict[str, Any]:
+    """Most recent {currentlyAvailable, maximumAvailable, restoreRate}, if known."""
+    return dict(_last_throttle)
+
+
+def wait_for_capacity(need_fraction: float = 0.25, timeout: float = 30.0) -> float:
+    """Block until the cost bucket is at least `need_fraction` full.
+
+    Cheap insurance for bulk writes: rather than sprinting until Shopify
+    returns THROTTLED and then backing off, pause while the bucket refills.
+    Returns how long we waited.
+    """
+    status = throttle_status()
+    available = status.get("currentlyAvailable")
+    maximum = status.get("maximumAvailable")
+    restore = status.get("restoreRate") or 50
+    if available is None or not maximum:
+        return 0.0
+
+    target = maximum * need_fraction
+    if available >= target:
+        return 0.0
+
+    wait = min((target - available) / restore, timeout)
+    if wait > 0:
+        log.info("Shopify bucket at %s/%s — pausing %.1fs to refill",
+                 available, maximum, wait)
+        time.sleep(wait)
+    return wait
+
+
+def _is_throttled(body: Dict[str, Any]) -> bool:
+    """True when a 200 response is actually a rate-limit rejection.
+
+    GOTCHA: GraphQL throttling does NOT come back as HTTP 429. Shopify returns
+    HTTP 200 with {"errors": [{"extensions": {"code": "THROTTLED"}}]} and no
+    data, so the 429 handler in _request_with_retry never sees it.
+    """
+    for err in body.get("errors") or []:
+        if isinstance(err, dict) and (err.get("extensions") or {}).get("code") == "THROTTLED":
+            return True
+    return False
+
+
+def _throttle_wait(body: Dict[str, Any], attempt: int) -> float:
+    """How long to wait before retrying a throttled query.
+
+    Shopify reports the leaky bucket in extensions.cost, so we can wait exactly
+    long enough for the missing points to be restored rather than guessing.
+    """
+    cost = (body.get("extensions") or {}).get("cost") or {}
+    status = cost.get("throttleStatus") or {}
+    needed = cost.get("requestedQueryCost") or 0
+    available = status.get("currentlyAvailable")
+    restore = status.get("restoreRate") or 50
+
+    if available is not None and needed > available and restore:
+        return min((needed - available) / restore + 0.25, 30.0)
+    return min(1.0 * (2 ** attempt), 30.0)   # fall back to exponential backoff
+
+
+def graphql(query: str, variables: Optional[Dict[str, Any]] = None,
+            max_retries: int = 5) -> Dict[str, Any]:
     """Run a GraphQL query against the Admin API and return the `data` payload.
 
-    Raises RuntimeError if the response contains GraphQL errors.
+    Retries automatically when Shopify throttles the query. Raises RuntimeError
+    for any other GraphQL error.
     """
-    resp = _request_with_retry(
-        "POST",
-        f"{_base_url()}/graphql.json",
-        json={"query": query, "variables": variables or {}},
-        headers=_headers(),
-        timeout=60,
-    )
-    resp.raise_for_status()
-    body = resp.json()
+    body: Dict[str, Any] = {}
+    for attempt in range(max_retries + 1):
+        resp = _request_with_retry(
+            "POST",
+            f"{_base_url()}/graphql.json",
+            json={"query": query, "variables": variables or {}},
+            headers=_headers(),
+            timeout=120,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        cost = (body.get("extensions") or {}).get("cost") or {}
+        if cost.get("throttleStatus"):
+            _last_throttle.update(cost["throttleStatus"])
+
+        if not _is_throttled(body):
+            break
+
+        if attempt == max_retries:
+            raise RuntimeError(
+                f"Shopify throttled this query {max_retries + 1} times in a row — "
+                "reduce concurrency or page size."
+            )
+        wait = _throttle_wait(body, attempt)
+        log.warning("Shopify THROTTLED — waiting %.1fs (attempt %d/%d)",
+                    wait, attempt + 1, max_retries)
+        time.sleep(wait)
+
     if "errors" in body:
         raise RuntimeError(f"Shopify GraphQL errors: {body['errors']}")
+    if "data" not in body:
+        raise RuntimeError(f"Shopify returned no data: {str(body)[:300]}")
     return body["data"]
 
 

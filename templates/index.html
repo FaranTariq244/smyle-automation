@@ -1522,6 +1522,11 @@
                 Run Reports
             </button>
 
+            <button class="nav-item" onclick="showPage('orders')">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                Orders
+            </button>
+
             <button class="nav-item" onclick="showPage('workflows')">
                 <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 Workflows
@@ -1717,6 +1722,238 @@
             </div>
 
             <!-- ═══ Workflows Page ═══ -->
+            <!-- ═══ Orders Page ═══ -->
+            <div id="page-orders" class="page">
+                <div class="page-header">
+                    <h2>Orders</h2>
+                    <p>Look up orders in Shopify and my-fulfilment.com — status, fulfilment and tracking. Read-only.</p>
+                </div>
+
+                <!-- Query builder.
+                     .card sets backdrop-filter, which makes every card its own
+                     stacking context — so without an explicit z-index the
+                     results card below paints over the open calendar no matter
+                     how high the calendar's own z-index is. -->
+                <div class="card" id="ord-query-card" style="position:relative; z-index:50; overflow:visible;">
+                    <div style="display:flex; gap:4px; margin-bottom:16px;">
+                        <button class="btn btn-sm datads-mode-btn active" id="ord-tab-range" onclick="setOrderMode('range')">Date range</button>
+                        <button class="btn btn-sm datads-mode-btn" id="ord-tab-single" onclick="setOrderMode('single')">Single order</button>
+                    </div>
+
+                    <!-- Range mode -->
+                    <div id="ord-mode-range">
+                        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;">
+                            <div class="form-group" style="margin:0; position:relative;">
+                                <label class="form-label">Date range</label>
+                                <button type="button" class="form-input" id="ord-range-display"
+                                        onclick="event.stopPropagation(); toggleRangeCalendar();"
+                                        style="width:280px; text-align:left; cursor:pointer;">
+                                    Select dates
+                                </button>
+
+                                <!-- Two-month range calendar. Click a start date,
+                                     then an end date; hovering previews the span. -->
+                                <div id="ord-calendar" onclick="event.stopPropagation()"
+                                     style="display:none; position:absolute; z-index:60;
+                                     top:100%; left:0; margin-top:6px; padding:14px;
+                                     background:#111827; border:1px solid var(--card-border);
+                                     border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.5);">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                                        <button type="button" class="btn btn-sm" onclick="shiftCalendar(-1)">&#8249;</button>
+                                        <span id="ord-cal-hint" style="font-size:11px; color:var(--text-secondary);">
+                                            Pick the start date
+                                        </span>
+                                        <button type="button" class="btn btn-sm" onclick="shiftCalendar(1)">&#8250;</button>
+                                    </div>
+                                    <div style="display:flex; gap:18px;" id="ord-cal-months"></div>
+                                    <div style="display:flex; gap:6px; margin-top:12px; flex-wrap:wrap;
+                                         border-top:1px solid var(--card-border); padding-top:10px;">
+                                        <button type="button" class="btn btn-sm" onclick="setOrderQuickRange(0)">Today</button>
+                                        <button type="button" class="btn btn-sm" onclick="setOrderQuickRange(1)">Yesterday</button>
+                                        <button type="button" class="btn btn-sm" onclick="setOrderQuickRange(7)">Last 7d</button>
+                                        <button type="button" class="btn btn-sm" onclick="setOrderQuickRange(30)">Last 30d</button>
+                                    </div>
+                                </div>
+                                <input type="hidden" id="ord-from">
+                                <input type="hidden" id="ord-to">
+                            </div>
+
+                            <div class="form-group" style="margin:0;">
+                                <label class="form-label">Source</label>
+                                <select id="ord-source" class="form-input" style="width:230px;"
+                                        onchange="onOrderSourceChange()">
+                                    <option value="shopify">Shopify</option>
+                                    <option value="fulfilment">my-fulfilment.com</option>
+                                    <option value="both">Both — compare &amp; move tracking</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:16px; font-size:13px; color:var(--text-secondary);">
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input type="checkbox" id="ord-untracked"> Only orders with no tracking
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input type="checkbox" id="ord-unfulfilled"> Only unfulfilled
+                            </label>
+                            <label id="ord-pushable-wrap" style="display:none; align-items:center; gap:6px; cursor:pointer;">
+                                <input type="checkbox" id="ord-pushable"> Only orders whose tracking can be moved
+                            </label>
+                        </div>
+                        <div id="ord-both-note" style="display:none; margin-top:10px; font-size:12px; color:#e0a030;">
+                            "Both" reads my-fulfilment.com once per order, so a wide range takes a while.
+                            It also unlocks row selection so you can move tracking in bulk.
+                        </div>
+                    </div>
+
+                    <!-- Single mode -->
+                    <div id="ord-mode-single" style="display:none;">
+                        <div style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;">
+                            <div class="form-group" style="margin:0;">
+                                <label class="form-label">Order number</label>
+                                <input type="text" id="ord-reference" class="form-input" placeholder="SMYLE120579" style="width:240px;">
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label class="form-label">Look in</label>
+                                <select id="ord-single-source" class="form-input" style="width:190px;">
+                                    <option value="both">Both systems</option>
+                                    <option value="shopify">Shopify only</option>
+                                    <option value="fulfilment">my-fulfilment.com only</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap:10px; align-items:center; margin-top:20px;">
+                        <button class="btn btn-primary" id="ord-fetch-btn" onclick="fetchOrders()">Fetch orders</button>
+                        <span id="ord-status" style="font-size:12px; color:var(--text-secondary);"></span>
+                    </div>
+                </div>
+
+                <!-- Automatic tracking sync -->
+                <div class="card" style="position:relative; z-index:2;">
+                    <div class="card-header" style="display:flex; justify-content:space-between;
+                         align-items:center; cursor:pointer;" onclick="toggleSyncSchedule()">
+                        <div>
+                            <strong style="font-size:14px;">Automatic tracking sync</strong>
+                            <div id="sync-sched-summary" style="font-size:12px; color:var(--text-secondary); margin-top:3px;">
+                                Loading…
+                            </div>
+                        </div>
+                        <span id="sync-sched-caret" style="font-size:18px; color:var(--text-secondary);">›</span>
+                    </div>
+
+                    <div id="sync-sched-body" style="display:none; margin-top:18px;">
+                        <!-- One block per schedule; each has its own window,
+                             times and mode so they can divide the work between
+                             them (e.g. recent days hourly, older days once). -->
+                        <div id="sync-list"></div>
+
+                        <div id="sync-coverage" style="font-size:12px; margin:14px 0;"></div>
+
+                        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                            <button class="btn" onclick="addSyncSchedule()">+ Add another schedule</button>
+                            <button class="btn btn-primary" onclick="saveSyncSchedules()">Save all schedules</button>
+                            <span id="sync-sched-status" style="font-size:12px; color:var(--text-secondary);"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Audit trail of everything written to Shopify -->
+                <div class="card" style="position:relative; z-index:2;">
+                    <div class="card-header" style="display:flex; justify-content:space-between;
+                         align-items:center; cursor:pointer;" onclick="toggleWriteLog()">
+                        <div>
+                            <strong style="font-size:14px;">Shopify write log</strong>
+                            <div id="wlog-summary" style="font-size:12px; color:var(--text-secondary); margin-top:3px;">
+                                Every tracking number this tool has written
+                            </div>
+                        </div>
+                        <span id="wlog-caret" style="font-size:18px; color:var(--text-secondary);">›</span>
+                    </div>
+
+                    <div id="wlog-body" style="display:none; margin-top:16px;">
+                        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+                            <input type="text" id="wlog-order" class="form-input" placeholder="Filter by order number"
+                                   style="width:210px;" onkeydown="if(event.key==='Enter')loadWriteLog()">
+                            <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer;">
+                                <input type="checkbox" id="wlog-failures" onchange="loadWriteLog()"> Failures only
+                            </label>
+                            <button class="btn btn-sm" onclick="loadWriteLog()">Refresh</button>
+                            <span style="font-size:11px; color:var(--text-secondary);">
+                                Also written to <code>logs/tracking_writes.log</code>
+                            </span>
+                        </div>
+                        <div style="overflow-x:auto; max-height:45vh; overflow-y:auto;">
+                            <table style="width:100%; font-size:12px; border-collapse:collapse;">
+                                <thead id="wlog-head"></thead>
+                                <tbody id="wlog-rows"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results -->
+                <div class="card" id="ord-results-card" style="display:none; position:relative; z-index:1;">
+                    <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                        <div id="ord-summary" style="font-size:13px; color:var(--text-secondary);"></div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="btn btn-sm" onclick="exportOrders('csv')">Download CSV</button>
+                            <button class="btn btn-sm" onclick="exportOrders('sheet')">Export to Sheets</button>
+                        </div>
+                    </div>
+                    <div id="ord-notes" style="font-size:12px; color:#e0a030; margin-bottom:10px;"></div>
+
+                    <!-- Bulk push bar: only when source = Both, so we have the two
+                         sides to compare. Appears once rows are selected. -->
+                    <div id="ord-bulk-bar" style="display:none; margin-bottom:14px; padding:12px 16px;
+                         border:1px solid rgba(74,222,128,0.35); border-radius:8px;
+                         background:rgba(74,222,128,0.07);
+                         align-items:center; gap:14px; flex-wrap:wrap;">
+                        <span id="ord-bulk-count" style="font-size:13px; font-weight:600;"></span>
+                        <button class="btn btn-primary btn-sm" id="ord-bulk-btn" onclick="pushTrackingBulk()">
+                            Move tracking to Shopify
+                        </button>
+                        <label style="display:flex; align-items:center; gap:6px; font-size:12px;
+                               color:var(--text-secondary); cursor:pointer;">
+                            <input type="checkbox" id="ord-bulk-notify" checked onchange="updateBulkNotifyStatus()">
+                            Email the customers
+                        </label>
+                        <span id="ord-bulk-notify-status" style="font-size:12px; font-weight:600;"></span>
+                    </div>
+
+                    <!-- Push-tracking panel: only shown when the portal has a T&T
+                         code that Shopify is missing. This is the one control in
+                         the tool that writes to Shopify. -->
+                    <div id="ord-sync-panel" style="display:none; margin-bottom:14px; padding:14px 16px;
+                         border:1px solid rgba(74,222,128,0.35); border-radius:8px;
+                         background:rgba(74,222,128,0.07);">
+                        <div style="font-size:13px; font-weight:600; margin-bottom:6px;">
+                            Tracking found in my-fulfilment.com, missing in Shopify
+                        </div>
+                        <div id="ord-sync-detail" style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;"></div>
+                        <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+                            <button class="btn btn-primary btn-sm" id="ord-sync-btn" onclick="pushTracking()">
+                                Move tracking to Shopify
+                            </button>
+                            <label style="display:flex; align-items:center; gap:6px; font-size:12px;
+                                   color:var(--text-secondary); cursor:pointer;">
+                                <input type="checkbox" id="ord-sync-notify" checked
+                                       onchange="updateNotifyStatus()">
+                                Email the customer
+                            </label>
+                            <span id="ord-sync-notify-status" style="font-size:12px; font-weight:600;"></span>
+                        </div>
+                    </div>
+                    <div style="overflow-x:auto; max-height:60vh; overflow-y:auto;">
+                        <table class="data-table" id="ord-table" style="width:100%; font-size:12px; border-collapse:collapse;">
+                            <thead id="ord-thead"></thead>
+                            <tbody id="ord-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <div id="page-workflows" class="page">
                 <div class="page-header">
                     <h2>Workflows</h2>
@@ -2187,6 +2424,19 @@
                             </div>
                         </div>
 
+                        <div class="form-group" style="margin-top: 16px;" data-report-key="order_export">
+                            <label class="form-label">ORDER_EXPORT_SHEET_URL</label>
+                            <div class="setting-input-wrapper">
+                                <input type="text" id="setting-orderexport" class="form-input" readonly placeholder="https://docs.google.com/spreadsheets/d/...">
+                                <button class="setting-btn setting-copy-btn" title="Copy" onclick="copySettingValue('setting-orderexport', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                                </button>
+                                <button class="setting-btn setting-edit-btn" title="Edit" onclick="toggleSettingEdit('setting-orderexport', this)">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </button>
+                            </div>
+                        </div>
+
                         <div class="form-group" style="margin-top: 16px;" data-report-key="datads">
                             <label class="form-label">DATADS_SHEET_URL</label>
                             <div class="setting-input-wrapper">
@@ -2445,10 +2695,877 @@
             else if (pageName === 'schedules') { loadSchedule(); loadAllSchedules(); }
             else if (pageName === 'logs') { loadLogs(); showLogList(); }
             else if (pageName === 'workflows') { loadWorkflows(); }
+            else if (pageName === 'orders') { initOrdersPage(); }
 
             // Close mobile sidebar
             document.getElementById('sidebar').classList.remove('open');
             document.getElementById('sidebar-overlay').classList.remove('open');
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // Orders page — interactive lookup across Shopify + my-fulfilment.com
+        // ═══════════════════════════════════════════════════════════════════
+        let orderMode = 'range';
+        let orderRows = [];
+
+        // Columns shown in the table. Anything else the API returns is still
+        // included in an export — this is display order, not the data set.
+        const ORDER_COLUMNS = [
+            ['order', 'Order'], ['created', 'Created'], ['source', 'Source'],
+            ['financial', 'Payment'], ['fulfillment', 'Fulfilment'],
+            ['has_tracking', 'Tracked'], ['tracking', 'Tracking #'],
+            ['carrier', 'Carrier'], ['portal_status', 'Portal'],
+            ['portal_tracking', 'Portal T&T'], ['shipper', 'Shipper'],
+            ['country', 'Country'], ['total', 'Total'],
+        ];
+        const PORTAL_COLUMNS = [
+            ['order', 'Order'], ['portal_created', 'Created'],
+            ['portal_status', 'Status'], ['in_wms', 'In WMS'],
+            ['portal_tracking', 'T&T code'], ['shipper', 'Shipper'],
+            ['delivery_mode', 'Delivery mode'], ['portal_country', 'Country'],
+            ['portal_error', 'Error'],
+        ];
+
+        // ── Range calendar ────────────────────────────────────────────────
+        let calAnchor = new Date();      // left-hand month
+        let calStart = null, calEnd = null, calHover = null;
+
+        // Explicit palette — the calendar sits on a dark card and every state
+        // needs a stated colour. Measured contrast: day 15.1:1 on #111827,
+        // in-range text 9.8:1, selected white on #2563eb 5.2:1, disabled 3.3:1
+        // (deliberately low — those days aren't actionable).
+        const CAL_COLORS = {
+            day:       '#e8edf5',
+            disabled:  '#5a6b85',
+            edgeBg:    '#2563eb',
+            edgeText:  '#ffffff',
+            rangeBg:   'rgba(59,130,246,0.28)',
+            rangeText: '#dbeafe',
+            hoverBg:   'rgba(255,255,255,0.10)',
+            todayRing: 'rgba(255,255,255,0.45)',
+        };
+
+        const isoDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const dayKey = d => isoDate(d);
+
+        function initOrdersPage() {
+            if (!document.getElementById('ord-from').value) setOrderQuickRange(1);
+            loadSyncSchedule();
+        }
+
+        // ── Shopify write log ─────────────────────────────────────────────
+        function toggleWriteLog() {
+            const b = document.getElementById('wlog-body');
+            const open = b.style.display === 'none';
+            b.style.display = open ? '' : 'none';
+            document.getElementById('wlog-caret').textContent = open ? '⌄' : '›';
+            if (open) loadWriteLog();
+        }
+
+        async function loadWriteLog() {
+            const params = new URLSearchParams({ limit: '200' });
+            const order = document.getElementById('wlog-order').value.trim();
+            if (order) params.set('order', order);
+            if (document.getElementById('wlog-failures').checked) params.set('failures', '1');
+
+            try {
+                const d = await (await fetch('/api/orders/write-log?' + params)).json();
+                const s = d.summary || {};
+                document.getElementById('wlog-summary').textContent =
+                    `${s.total || 0} write(s) — ${s.succeeded || 0} ok, ${s.failed || 0} failed, `
+                    + `${s.emailed || 0} emailed a customer · ${s.today || 0} today`
+                    + (s.last ? ` · last ${s.last}` : '');
+
+                const cols = ['at', 'origin', 'action', 'order_name', 'tracking',
+                              'carrier', 'notified', 'ok', 'result'];
+                const labels = ['When', 'Origin', 'Action', 'Order', 'Tracking',
+                                'Carrier', 'Emailed', 'Result', 'Detail'];
+                document.getElementById('wlog-head').innerHTML = '<tr>' + labels.map(l =>
+                    `<th style="text-align:left; padding:7px 9px; border-bottom:1px solid var(--border);
+                        position:sticky; top:0; background:#111827; white-space:nowrap;">${l}</th>`
+                ).join('') + '</tr>';
+
+                const rows = d.entries || [];
+                document.getElementById('wlog-rows').innerHTML = rows.length
+                    ? rows.map(r => '<tr>' + cols.map(k => {
+                        let v = r[k];
+                        let style = 'padding:6px 9px; border-bottom:1px solid var(--border); white-space:nowrap;';
+                        if (k === 'notified') { v = r.notified ? 'yes' : 'no';
+                            style += r.notified ? 'color:#e0a030;' : 'color:var(--text-secondary);'; }
+                        if (k === 'ok') { v = r.ok ? 'OK' : 'FAILED';
+                            style += r.ok ? 'color:#4ade80;' : 'color:#f87171;'; }
+                        if (k === 'result') style += 'white-space:normal; max-width:340px;';
+                        return `<td style="${style}">${escapeHtml(String(v == null ? '' : v))}</td>`;
+                      }).join('') + '</tr>').join('')
+                    : '<tr><td style="padding:14px; color:var(--text-secondary);">No writes recorded yet.</td></tr>';
+            } catch (err) {
+                document.getElementById('wlog-summary').textContent = 'Could not load the write log';
+            }
+        }
+
+        // ── Automatic tracking sync — N independent schedules ─────────────
+        // Each entry has its own window (size + how many recent days to skip),
+        // its own run times and its own mode, so they can divide the work:
+        // e.g. "today + yesterday, apply hourly" alongside "the 3 days before
+        // that, once a night".
+        let syncSchedules = [];
+        let syncSavedRows = {};     // id -> scheduler rows from the server
+
+        function toggleSyncSchedule() {
+            const b = document.getElementById('sync-sched-body');
+            const open = b.style.display === 'none';
+            b.style.display = open ? '' : 'none';
+            document.getElementById('sync-sched-caret').textContent = open ? '⌄' : '›';
+        }
+
+        async function loadSyncSchedule() {
+            try {
+                const d = await (await fetch('/api/orders/sync-schedule')).json();
+                if (!d.success) return;
+                syncSchedules = (d.schedules || []).map(s => ({ ...s }));
+                syncSavedRows = {};
+                (d.schedules || []).forEach(s => { syncSavedRows[s.id] = s.rows || []; });
+                renderSyncList();
+            } catch (err) {
+                document.getElementById('sync-sched-summary').textContent =
+                    'Could not load the schedules';
+            }
+        }
+
+        function syncWindow(s) {
+            const end = new Date();
+            end.setDate(end.getDate() - (parseInt(s.skip_days, 10) || 0));
+            const start = new Date(end);
+            start.setDate(start.getDate() - ((parseInt(s.days_back, 10) || 1) - 1));
+            return { from: isoDate(start), to: isoDate(end) };
+        }
+
+        function addSyncSchedule() {
+            const n = syncSchedules.length + 1;
+            syncSchedules.push({
+                id: 's' + Date.now().toString(36),
+                name: 'Schedule ' + n, enabled: false,
+                days_back: 3, skip_days: 0, times: ['08:00'],
+                apply: false, notify_customer: true,
+            });
+            renderSyncList();
+        }
+
+        function removeSyncSchedule(i) {
+            if (!confirm(`Remove "${syncSchedules[i].name}"? Its scheduled runs are `
+                       + `deleted when you save.`)) return;
+            syncSchedules.splice(i, 1);
+            renderSyncList();
+        }
+
+        function setSyncField(i, field, value) {
+            if (field === 'days_back' || field === 'skip_days') {
+                value = Math.max(field === 'skip_days' ? 0 : 1, parseInt(value, 10) || 0);
+            }
+            syncSchedules[i][field] = value;
+            renderSyncList();
+        }
+
+        function setSyncTime(i, j, value) { syncSchedules[i].times[j] = value; renderSyncList(); }
+        function addSyncTime(i) { syncSchedules[i].times.push('18:00'); renderSyncList(); }
+        function removeSyncTime(i, j) { syncSchedules[i].times.splice(j, 1); renderSyncList(); }
+
+        function renderSyncList() {
+            const host = document.getElementById('sync-list');
+            if (!syncSchedules.length) {
+                host.innerHTML = '<div style="font-size:13px; color:var(--text-secondary);">'
+                    + 'No schedules yet — add one below.</div>';
+                document.getElementById('sync-sched-summary').textContent =
+                    'No automatic runs configured';
+                document.getElementById('sync-coverage').innerHTML = '';
+                return;
+            }
+
+            host.innerHTML = syncSchedules.map((s, i) => {
+                const w = syncWindow(s);
+                const rows = syncSavedRows[s.id] || [];
+                const times = (s.times || []).map((t, j) => `
+                    <span style="display:inline-flex; align-items:center; gap:4px;">
+                        <input type="time" class="form-input" value="${t}" style="width:118px;"
+                               onchange="setSyncTime(${i},${j},this.value)">
+                        ${s.times.length > 1
+                            ? `<button class="btn btn-sm" title="Remove" onclick="removeSyncTime(${i},${j})">×</button>`
+                            : ''}</span>`).join('');
+
+                return `
+                <div style="border:1px solid var(--card-border); border-radius:10px;
+                     padding:16px; margin-bottom:14px;
+                     background:${s.enabled ? 'rgba(74,222,128,0.05)' : 'transparent'};">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                        <input class="form-input" value="${escapeHtml(s.name)}" style="width:230px; font-weight:600;"
+                               onchange="setSyncField(${i},'name',this.value)">
+                        <div style="display:flex; align-items:center; gap:14px;">
+                            <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer;">
+                                <input type="checkbox" ${s.enabled ? 'checked' : ''}
+                                       onchange="setSyncField(${i},'enabled',this.checked)"> Enabled
+                            </label>
+                            <button class="btn btn-sm" onclick="runSyncNow('${s.id}')">Run dry run now</button>
+                            <button class="btn btn-sm" onclick="removeSyncSchedule(${i})">Delete</button>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap:22px; flex-wrap:wrap; margin-top:14px; align-items:flex-start;">
+                        <div class="form-group" style="margin:0;">
+                            <label class="form-label">Window size</label>
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <input type="number" class="form-input" min="1" max="90" value="${s.days_back}"
+                                       style="width:80px;" onchange="setSyncField(${i},'days_back',this.value)">
+                                <span style="font-size:12px; color:var(--text-secondary);">day(s)</span>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label class="form-label">Skip most recent</label>
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <input type="number" class="form-input" min="0" max="90" value="${s.skip_days || 0}"
+                                       style="width:80px;" onchange="setSyncField(${i},'skip_days',this.value)">
+                                <span style="font-size:12px; color:var(--text-secondary);">day(s)</span>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label class="form-label">Run at</label>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">${times}</div>
+                            <button class="btn btn-sm" style="margin-top:8px;" onclick="addSyncTime(${i})">+ time</button>
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label class="form-label">Each run</label>
+                            <select class="form-input" style="width:260px;"
+                                    onchange="setSyncField(${i},'apply',this.value==='1')">
+                                <option value="0" ${!s.apply ? 'selected' : ''}>Dry run — report only</option>
+                                <option value="1" ${s.apply ? 'selected' : ''}>Apply — write to Shopify</option>
+                            </select>
+                            ${s.apply ? `
+                            <label style="display:flex; align-items:center; gap:6px; font-size:12px; margin-top:8px; cursor:pointer;">
+                                <input type="checkbox" ${s.notify_customer ? 'checked' : ''}
+                                       onchange="setSyncField(${i},'notify_customer',this.checked)">
+                                Email the customers
+                            </label>
+                            <div style="font-size:11px; font-weight:600; margin-top:4px;
+                                 color:${s.notify_customer ? '#4ade80' : '#f87171'};">
+                                ${s.notify_customer ? 'TRUE — customers will be emailed' : 'FALSE — no emails'}
+                            </div>` : ''}
+                        </div>
+                    </div>
+
+                    <div style="font-size:11px; color:var(--text-secondary); margin-top:12px;">
+                        Today this covers <strong>${w.from} → ${w.to}</strong>
+                        ${s.skip_days ? `(today and the previous ${s.skip_days - 1 || 0} day(s) excluded)` : '(includes today)'}
+                        · ${s.times.length}× a day
+                    </div>
+                    ${rows.length ? `<div style="font-size:11px; color:var(--text-secondary); margin-top:6px;">`
+                        + rows.map(r => `${r.time} next ${r.next_run || '—'}`
+                            + (r.last_run ? `, last ${r.last_run} (${r.last_status || '?'})` : '')).join(' · ')
+                        + '</div>' : ''}
+                </div>`;
+            }).join('');
+
+            renderSyncOverview();
+        }
+
+        function renderSyncOverview() {
+            const live = syncSchedules.filter(s => s.enabled);
+            const runs = live.reduce((n, s) => n + (s.times || []).length, 0);
+            document.getElementById('sync-sched-summary').textContent = live.length
+                ? `${live.length} active schedule(s), ${runs} run(s) a day`
+                : `${syncSchedules.length} schedule(s), none enabled`;
+
+            // Show which calendar days the enabled schedules actually cover, so
+            // a gap or an overlap between them is visible before saving.
+            const covered = {};
+            live.forEach(s => {
+                const end = new Date(); end.setDate(end.getDate() - (parseInt(s.skip_days, 10) || 0));
+                for (let k = 0; k < (parseInt(s.days_back, 10) || 1); k++) {
+                    const d = new Date(end); d.setDate(d.getDate() - k);
+                    (covered[isoDate(d)] = covered[isoDate(d)] || []).push(s.name);
+                }
+            });
+            const days = Object.keys(covered).sort().reverse();
+            const dupes = days.filter(d => covered[d].length > 1);
+            const el = document.getElementById('sync-coverage');
+            if (!days.length) { el.innerHTML = ''; return; }
+            el.innerHTML = `<span style="color:var(--text-secondary);">Covered today: `
+                + `<strong>${days[days.length - 1]} → ${days[0]}</strong> (${days.length} day(s))</span>`
+                + (dupes.length ? `<span style="color:#e0a030;"> · ${dupes.length} day(s) covered by `
+                    + `more than one schedule: ${dupes.slice(0, 3).join(', ')}</span>` : '');
+        }
+
+        async function saveSyncSchedules() {
+            const statusEl = document.getElementById('sync-sched-status');
+            const writing = syncSchedules.filter(s => s.enabled && s.apply);
+            if (writing.length && !confirm(
+                    `${writing.length} enabled schedule(s) will WRITE tracking into Shopify:\n\n`
+                    + writing.map(s => {
+                        const w = syncWindow(s);
+                        return `• ${s.name}: ${w.from} → ${w.to}, ${s.times.length}x a day, `
+                             + (s.notify_customer ? 'customers emailed' : 'no emails');
+                      }).join('\n'))) return;
+
+            statusEl.textContent = 'Saving…';
+            try {
+                const res = await fetch('/api/orders/sync-schedule', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schedules: syncSchedules }),
+                });
+                const d = await res.json();
+                if (!d.success) throw new Error(d.error || 'Save failed');
+                showToast(d.message, 'success');
+                statusEl.textContent = '';
+                loadSyncSchedule();
+            } catch (err) {
+                statusEl.textContent = '';
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function runSyncNow(id) {
+            try {
+                const res = await fetch('/api/orders/sync-schedule/run-now', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: id, apply: false }),
+                });
+                const d = await res.json();
+                if (!d.success) throw new Error(d.error || 'Could not start');
+                showToast(d.message + ' — watch the Run Logs page', 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+        }
+
+        function toggleRangeCalendar(force) {
+            const el = document.getElementById('ord-calendar');
+            const show = force !== undefined ? force : el.style.display === 'none';
+            el.style.display = show ? '' : 'none';
+            if (show) {
+                // Parse the parts rather than new Date("YYYY-MM-DD"), which is
+                // read as UTC midnight and lands on the previous day west of
+                // Greenwich. Anchor on the 1st so setMonth can't roll over.
+                const base = calStart
+                    ? new Date(+calStart.slice(0, 4), +calStart.slice(5, 7) - 1, 1)
+                    : new Date();
+                calAnchor = new Date(base.getFullYear(), base.getMonth() - 1, 1);
+                renderCalendar();
+                positionCalendar();
+            }
+        }
+
+        // Drop downwards when there's room, otherwise flip above the field so
+        // the whole calendar stays on screen and clickable.
+        function positionCalendar() {
+            const cal = document.getElementById('ord-calendar');
+            const field = document.getElementById('ord-range-display');
+            const below = window.innerHeight - field.getBoundingClientRect().bottom;
+
+            if (below < cal.offsetHeight + 16) {
+                cal.style.top = 'auto';
+                cal.style.bottom = '100%';
+                cal.style.marginTop = '0';
+                cal.style.marginBottom = '6px';
+            } else {
+                cal.style.top = '100%';
+                cal.style.bottom = 'auto';
+                cal.style.marginTop = '6px';
+                cal.style.marginBottom = '0';
+            }
+        }
+
+        function shiftCalendar(delta) {
+            calAnchor.setMonth(calAnchor.getMonth() + delta);
+            renderCalendar();
+        }
+
+        // Build the month grids once per navigation, then only repaint colours
+        // on hover/select. Rebuilding the DOM on mouseenter destroys the element
+        // under the cursor, which re-fires mouseenter and makes the whole
+        // calendar unusable.
+        function renderCalendar() {
+            const host = document.getElementById('ord-cal-months');
+            host.innerHTML = '';
+            for (let i = 0; i < 2; i++) {
+                const m = new Date(calAnchor.getFullYear(), calAnchor.getMonth() + i, 1);
+                host.appendChild(buildMonth(m));
+            }
+            paintRange();
+        }
+
+        function buildMonth(monthDate) {
+            const wrap = document.createElement('div');
+            const title = document.createElement('div');
+            title.textContent = monthDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+            title.style.cssText = 'font-size:12px; font-weight:600; text-align:center; margin-bottom:8px;';
+            wrap.appendChild(title);
+
+            const grid = document.createElement('div');
+            grid.style.cssText = 'display:grid; grid-template-columns:repeat(7,30px); gap:2px;';
+
+            ['M', 'T', 'W', 'T', 'F', 'S', 'S'].forEach(d => {
+                const c = document.createElement('div');
+                c.textContent = d;
+                c.style.cssText = 'font-size:10px; font-weight:600; text-align:center;'
+                    + 'color:#8fa3c0; padding:3px 0; letter-spacing:.03em;';
+                grid.appendChild(c);
+            });
+
+            const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+            const lead = (first.getDay() + 6) % 7;   // Monday-first
+            for (let i = 0; i < lead; i++) grid.appendChild(document.createElement('div'));
+
+            const days = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+            const today = dayKey(new Date());
+
+            for (let d = 1; d <= days; d++) {
+                const key = dayKey(new Date(monthDate.getFullYear(), monthDate.getMonth(), d));
+                const future = key > today;
+
+                const cell = document.createElement('button');
+                cell.type = 'button';
+                cell.textContent = d;
+                cell.dataset.date = key;
+                cell.disabled = future;
+                // A <button> defaults to the UA's dark ButtonText, which is
+                // invisible on this card — always set an explicit colour.
+                cell.style.cssText = `width:30px; height:28px; font-size:12px; border:none;
+                    border-radius:5px; background:transparent; font-family:inherit;
+                    color:${future ? CAL_COLORS.disabled : CAL_COLORS.day};
+                    cursor:${future ? 'not-allowed' : 'pointer'};`;
+
+                if (!future) {
+                    cell.addEventListener('click', ev => {
+                        ev.stopPropagation();      // don't trip the click-away handler
+                        pickCalendarDate(key);
+                    });
+                    cell.addEventListener('mouseenter', () => {
+                        if (calStart && !calEnd) { calHover = key; paintRange(); }
+                        else if (key !== calStart && key !== calEnd) {
+                            cell.style.background = CAL_COLORS.hoverBg;
+                        }
+                    });
+                    cell.addEventListener('mouseleave', () => {
+                        if (!(calStart && !calEnd)) paintRange();
+                    });
+                }
+                grid.appendChild(cell);
+            }
+            wrap.appendChild(grid);
+            return wrap;
+        }
+
+        function paintRange() {
+            const today = dayKey(new Date());
+            const a = calStart, b = calEnd || calHover;
+            const lo = (a && b) ? (a < b ? a : b) : null;
+            const hi = (a && b) ? (a < b ? b : a) : null;
+
+            document.querySelectorAll('#ord-cal-months button[data-date]').forEach(cell => {
+                const key = cell.dataset.date;
+                const isEdge = key === calStart || key === calEnd;
+                const inRange = lo && hi && key > lo && key < hi;
+
+                cell.style.background = isEdge ? CAL_COLORS.edgeBg
+                    : inRange ? CAL_COLORS.rangeBg : 'transparent';
+                cell.style.color = isEdge ? CAL_COLORS.edgeText
+                    : cell.disabled ? CAL_COLORS.disabled
+                    : inRange ? CAL_COLORS.rangeText : CAL_COLORS.day;
+                cell.style.fontWeight = (isEdge || inRange) ? '600' : '400';
+                cell.style.outline = (key === today && !isEdge)
+                    ? `1px solid ${CAL_COLORS.todayRing}` : 'none';
+            });
+
+            document.getElementById('ord-cal-hint').textContent =
+                (calStart && !calEnd) ? 'Now pick the end date' : 'Pick the start date';
+        }
+
+        function pickCalendarDate(key) {
+            if (!calStart || calEnd) {
+                calStart = key; calEnd = null; calHover = null;    // start a fresh range
+            } else if (key < calStart) {
+                calEnd = calStart; calStart = key;                 // picked backwards — swap
+            } else {
+                calEnd = key;
+            }
+            applyRange();
+            paintRange();
+            if (calStart && calEnd) {
+                setTimeout(() => { document.getElementById('ord-calendar').style.display = 'none'; }, 180);
+            }
+        }
+
+        function applyRange() {
+            document.getElementById('ord-from').value = calStart || '';
+            document.getElementById('ord-to').value = calEnd || calStart || '';
+            const label = document.getElementById('ord-range-display');
+            if (!calStart) { label.textContent = 'Select dates'; return; }
+            label.textContent = (!calEnd || calEnd === calStart)
+                ? calStart : `${calStart}  →  ${calEnd}`;
+        }
+
+        // Click-away closes the calendar. Clicks inside it (and on the field
+        // that opens it) call stopPropagation, so anything reaching document is
+        // by definition outside. Testing cal.contains(e.target) does NOT work
+        // here: a day cell is replaced during the click, so by the time the
+        // event bubbles up its target is already detached from the DOM.
+        document.addEventListener('click', () => {
+            const cal = document.getElementById('ord-calendar');
+            if (cal) cal.style.display = 'none';
+        });
+
+        function onOrderSourceChange() {
+            const both = document.getElementById('ord-source').value === 'both';
+            document.getElementById('ord-both-note').style.display = both ? '' : 'none';
+            document.getElementById('ord-pushable-wrap').style.display = both ? 'flex' : 'none';
+        }
+
+        function setOrderMode(mode) {
+            orderMode = mode;
+            document.getElementById('ord-mode-range').style.display = mode === 'range' ? '' : 'none';
+            document.getElementById('ord-mode-single').style.display = mode === 'single' ? '' : 'none';
+            document.getElementById('ord-tab-range').classList.toggle('active', mode === 'range');
+            document.getElementById('ord-tab-single').classList.toggle('active', mode === 'single');
+        }
+
+        function setOrderQuickRange(daysBack) {
+            const end = new Date();
+            end.setDate(end.getDate() - (daysBack === 1 ? 1 : 0));
+            const start = new Date(end);
+            if (daysBack > 1) start.setDate(start.getDate() - (daysBack - 1));
+            calStart = isoDate(start);
+            calEnd = isoDate(end);
+            calHover = null;
+            applyRange();
+            const cal = document.getElementById('ord-calendar');
+            if (cal && cal.style.display !== 'none') { renderCalendar(); cal.style.display = 'none'; }
+        }
+
+        async function fetchOrders() {
+            const btn = document.getElementById('ord-fetch-btn');
+            const statusEl = document.getElementById('ord-status');
+            const body = {};
+
+            if (orderMode === 'single') {
+                const ref = document.getElementById('ord-reference').value.trim();
+                if (!ref) { showToast('Enter an order number', 'error'); return; }
+                body.reference = ref;
+                body.source = document.getElementById('ord-single-source').value;
+            } else {
+                body.date_from = document.getElementById('ord-from').value;
+                body.date_to = document.getElementById('ord-to').value;
+                if (!body.date_from || !body.date_to) {
+                    showToast('Pick a start and end date', 'error'); return;
+                }
+                body.source = document.getElementById('ord-source').value;
+                body.untracked_only = document.getElementById('ord-untracked').checked;
+                body.unfulfilled_only = document.getElementById('ord-unfulfilled').checked;
+                body.pushable_only = document.getElementById('ord-pushable').checked;
+            }
+
+            // Clear the previous result set first — showing stale rows while a
+            // new query runs is how people end up reading the wrong data.
+            clearOrderResults();
+
+            btn.disabled = true;
+            const slow = body.source === 'both' || body.source === 'fulfilment';
+            statusEl.textContent = slow
+                ? 'Fetching — reading my-fulfilment.com per order, this can take a few minutes…'
+                : 'Fetching…';
+
+            try {
+                const res = await fetch('/api/orders/lookup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Lookup failed');
+
+                orderRows = data.rows || [];
+                renderOrders(orderRows, data.summary, data.notes || [], body.source);
+                renderSyncPanel(data.sync, body.reference);
+                statusEl.textContent = '';
+            } catch (err) {
+                statusEl.textContent = '';
+                showToast(err.message, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function clearOrderResults() {
+            orderRows = [];
+            document.getElementById('ord-results-card').style.display = 'none';
+            document.getElementById('ord-thead').innerHTML = '';
+            document.getElementById('ord-tbody').innerHTML = '';
+            document.getElementById('ord-summary').textContent = '';
+            document.getElementById('ord-notes').textContent = '';
+            document.getElementById('ord-sync-panel').style.display = 'none';
+            document.getElementById('ord-bulk-bar').style.display = 'none';
+        }
+
+        function renderOrders(rows, summary, notes, source) {
+            const card = document.getElementById('ord-results-card');
+            const thead = document.getElementById('ord-thead');
+            const tbody = document.getElementById('ord-tbody');
+            const columns = source === 'fulfilment' ? PORTAL_COLUMNS : ORDER_COLUMNS;
+            // Row selection only makes sense when we compared both systems.
+            const selectable = source === 'both';
+
+            card.style.display = '';
+            document.getElementById('ord-notes').textContent = notes.join(' ');
+
+            if (!rows.length) {
+                thead.innerHTML = '';
+                tbody.innerHTML = '<tr><td style="padding:16px; color:var(--text-secondary);">No orders matched.</td></tr>';
+                document.getElementById('ord-summary').textContent = '0 orders';
+                return;
+            }
+
+            const th = label =>
+                `<th style="text-align:left; padding:8px 10px; border-bottom:1px solid var(--border);
+                    position:sticky; top:0; background:#111827; white-space:nowrap;">${label}</th>`;
+
+            thead.innerHTML = '<tr>'
+                + (selectable ? th('<input type="checkbox" id="ord-select-all" onclick="toggleSelectAll(this)">') : '')
+                + columns.map(([, label]) => th(label)).join('')
+                + (selectable ? th('Move?') : '')
+                + '</tr>';
+
+            tbody.innerHTML = rows.map((r, i) => {
+                const cells = columns.map(([key]) => {
+                    let v = r[key] == null ? '' : String(r[key]);
+                    let style = 'padding:7px 10px; border-bottom:1px solid var(--border); white-space:nowrap;';
+                    if (key === 'has_tracking') style += v === 'yes' ? 'color:#4ade80;' : 'color:#f87171;';
+                    if (key === 'fulfillment' && v === 'UNFULFILLED') style += 'color:#e0a030;';
+                    return `<td style="${style}">${escapeHtml(v)}</td>`;
+                }).join('');
+
+                const base = 'padding:7px 10px; border-bottom:1px solid var(--border); white-space:nowrap;';
+                let box = '', verdict = '';
+                if (selectable) {
+                    box = `<td style="${base}">` + (r.can_push
+                        ? `<input type="checkbox" class="ord-row-check" data-index="${i}" onchange="updateBulkBar()">`
+                        : '') + '</td>';
+                    verdict = r.can_push
+                        ? `<td style="${base} color:#4ade80;">${escapeHtml(r.sync_action)}</td>`
+                        : `<td style="${base} color:var(--text-secondary);">${escapeHtml(r.sync_reason || '-')}</td>`;
+                }
+                return `<tr>${box}${cells}${verdict}</tr>`;
+            }).join('');
+
+            updateBulkBar();
+
+            const s = summary || {};
+            let text = `${s.total} order(s)`;
+            if (s.fulfilled !== undefined) text += ` · fulfilled ${s.fulfilled}`;
+            if (s.tracked !== undefined) text += ` · with tracking ${s.tracked}`;
+            if (s.gaps) text += ` · ${s.gaps} have a portal T&T but no Shopify tracking`;
+            document.getElementById('ord-summary').textContent = text;
+        }
+
+        // The push-tracking panel appears only when the server says both systems
+        // were compared and Shopify is genuinely missing a tracking number the
+        // portal already has. Everything is re-checked server-side on push.
+        let syncReference = null;
+
+        function renderSyncPanel(sync, reference) {
+            const panel = document.getElementById('ord-sync-panel');
+            syncReference = null;
+
+            if (!sync || !sync.can_push) { panel.style.display = 'none'; return; }
+
+            syncReference = reference;
+            document.getElementById('ord-sync-detail').innerHTML =
+                `Portal tracking <strong>${escapeHtml(sync.tracking)}</strong>` +
+                ` &middot; carrier <strong>${escapeHtml(sync.carrier || 'not recognised — will be sent without one')}</strong><br>` +
+                escapeHtml(sync.effect) + '.';
+            // Default ON — the shipping email is the whole point of adding a
+            // tracking number, so it has to be a deliberate act to turn it off.
+            document.getElementById('ord-sync-notify').checked = true;
+            updateNotifyStatus();
+            document.getElementById('ord-sync-btn').disabled = false;
+            panel.style.display = '';
+        }
+
+        function updateNotifyStatus() {
+            const on = document.getElementById('ord-sync-notify').checked;
+            const el = document.getElementById('ord-sync-notify-status');
+            el.textContent = on
+                ? 'TRUE — the customer will be emailed their tracking link'
+                : 'FALSE — no email will be sent';
+            el.style.color = on ? '#4ade80' : '#f87171';
+        }
+
+        async function pushTracking() {
+            if (!syncReference) return;
+            const notify = document.getElementById('ord-sync-notify').checked;
+
+            const warning = notify
+                ? '\n\nEmail: TRUE — Shopify will email the customer their tracking link.'
+                : '\n\nEmail: FALSE — no notification will be sent. The customer will not '
+                  + 'know the tracking number exists.';
+            if (!confirm(`Write this tracking number into Shopify for ${syncReference}?${warning}`)) return;
+
+            const btn = document.getElementById('ord-sync-btn');
+            btn.disabled = true;
+            btn.textContent = 'Writing…';
+
+            try {
+                const res = await fetch('/api/orders/push-tracking', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reference: syncReference, notify_customer: notify }),
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Push failed');
+
+                showToast(data.message, 'success');
+                document.getElementById('ord-sync-panel').style.display = 'none';
+                fetchOrders();          // re-read both systems so the table reflects the write
+            } catch (err) {
+                showToast(err.message, 'error');
+                btn.disabled = false;
+            } finally {
+                btn.textContent = 'Move tracking to Shopify';
+            }
+        }
+
+        // ── Bulk selection & push ────────────────────────────────────────
+        function toggleSelectAll(box) {
+            document.querySelectorAll('.ord-row-check').forEach(c => { c.checked = box.checked; });
+            updateBulkBar();
+        }
+
+        function selectedOrderRows() {
+            return Array.from(document.querySelectorAll('.ord-row-check:checked'))
+                .map(c => orderRows[parseInt(c.dataset.index, 10)])
+                .filter(Boolean);
+        }
+
+        function updateBulkBar() {
+            const bar = document.getElementById('ord-bulk-bar');
+            const picked = selectedOrderRows();
+            if (!picked.length) { bar.style.display = 'none'; return; }
+            bar.style.display = 'flex';
+            document.getElementById('ord-bulk-count').textContent =
+                `${picked.length} order(s) selected`;
+            updateBulkNotifyStatus();
+        }
+
+        function updateBulkNotifyStatus() {
+            const on = document.getElementById('ord-bulk-notify').checked;
+            const el = document.getElementById('ord-bulk-notify-status');
+            el.textContent = on
+                ? 'TRUE — every selected customer will be emailed'
+                : 'FALSE — no emails will be sent';
+            el.style.color = on ? '#4ade80' : '#f87171';
+        }
+
+        async function pushTrackingBulk() {
+            const picked = selectedOrderRows();
+            if (!picked.length) return;
+            const notify = document.getElementById('ord-bulk-notify').checked;
+            const refs = picked.map(r => r.order);
+
+            const warning = notify
+                ? `\n\nEmail: TRUE — Shopify will email ${refs.length} customer(s) their tracking link.`
+                : '\n\nEmail: FALSE — no notifications will be sent.';
+            if (!confirm(`Write tracking into Shopify for ${refs.length} order(s)?${warning}`)) return;
+
+            const btn = document.getElementById('ord-bulk-btn');
+            btn.disabled = true;
+            btn.textContent = `Writing ${refs.length}…`;
+
+            try {
+                const res = await fetch('/api/orders/push-tracking-bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ references: refs, notify_customer: notify }),
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Bulk push failed');
+
+                // The push runs detached, so follow its progress rather than
+                // holding a request open for what may be thousands of orders.
+                showToast(data.message, 'success');
+                pollBulkPush();
+            } catch (err) {
+                showToast(err.message, 'error');
+                btn.disabled = false;
+                btn.textContent = 'Move tracking to Shopify';
+            }
+        }
+
+        function pollBulkPush() {
+            const btn = document.getElementById('ord-bulk-btn');
+            const countEl = document.getElementById('ord-bulk-count');
+
+            const tick = async () => {
+                try {
+                    const s = await (await fetch('/api/orders/push-tracking-bulk/status')).json();
+                    countEl.textContent = s.message || '';
+                    if (s.running) {
+                        btn.textContent = `Writing ${s.done}/${s.total}…`;
+                        setTimeout(tick, 1500);
+                        return;
+                    }
+                    btn.disabled = false;
+                    btn.textContent = 'Move tracking to Shopify';
+                    (s.results || []).filter(r => !r.ok).forEach(r =>
+                        console.warn(`${r.order}: ${r.message}`));
+                    showToast(s.message || 'Bulk push finished',
+                              s.failed ? 'error' : 'success');
+                    fetchOrders();   // re-read both systems so the table reflects the writes
+                } catch (err) {
+                    btn.disabled = false;
+                    btn.textContent = 'Move tracking to Shopify';
+                    showToast('Lost track of the bulk push — check the Run Logs', 'error');
+                }
+            };
+            tick();
+        }
+
+        async function exportOrders(target) {
+            if (!orderRows.length) { showToast('Nothing to export', 'error'); return; }
+
+            const from = document.getElementById('ord-from').value;
+            const to = document.getElementById('ord-to').value;
+            const span = orderMode === 'single'
+                ? 'lookups' : (from === to ? from : `${from}_${to}`);
+
+            try {
+                const res = await fetch('/api/orders/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        rows: orderRows,
+                        target: target,
+                        tab: `orders_${span}`,
+                        filename: `orders_${span}.csv`,
+                    }),
+                });
+
+                if (target === 'csv') {
+                    if (!res.ok) throw new Error((await res.json()).error || 'Export failed');
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `orders_${span}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                    showToast(`Downloaded ${orderRows.length} rows`, 'success');
+                } else {
+                    const data = await res.json();
+                    if (!data.success) throw new Error(data.error || 'Export failed');
+                    showToast(data.message, 'success');
+                    if (data.url) window.open(data.url, '_blank');
+                }
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
         }
 
         // Status updates
@@ -3294,6 +4411,7 @@
                 document.getElementById('setting-ordertype').value = data.ORDER_TYPE_SHEET_URL || '';
                 document.getElementById('setting-addtracker').value = data.DAILY_ADD_TRACKER_SHEET_URL || '';
                 document.getElementById('setting-datads').value = data.DATADS_SHEET_URL || '';
+                document.getElementById('setting-orderexport').value = data.ORDER_EXPORT_SHEET_URL || '';
                 document.getElementById('setting-weekly').value = data.SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL || '';
 
                 // Reset all inputs to readonly and clear editing state
@@ -3312,6 +4430,7 @@
                 ORDER_TYPE_SHEET_URL: document.getElementById('setting-ordertype').value,
                 DAILY_ADD_TRACKER_SHEET_URL: document.getElementById('setting-addtracker').value,
                 DATADS_SHEET_URL: document.getElementById('setting-datads').value,
+                ORDER_EXPORT_SHEET_URL: document.getElementById('setting-orderexport').value,
                 SMYLE_ONLINE_STRATEGY_RN_FC1_WEEKLY_SHEET_URL: document.getElementById('setting-weekly').value
             };
 

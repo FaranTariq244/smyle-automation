@@ -26,6 +26,9 @@ shopify-connection.env
 
 # my-fulfilment.com (Nic. Oud) portal login — never commit
 fulfilment.env
+# Cached portal session cookies — live credentials, same as the password.
+# The glob matters: the session pool writes .pool0/.pool1/... alongside it.
+fulfilment_session.cookies*
 
 # Slack Incoming Webhook URL — secret, never commit
 supervisor/slack.env

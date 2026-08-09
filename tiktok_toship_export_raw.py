@@ -10,6 +10,16 @@ Workflow (first candidate for the new "Workflows" dashboard section):
     5. Click Download on the new report
     6. Read the downloaded CSV and print the extracted data to the log
 
+Then, for each order that has tracking:
+    7. On the To ship list, click "Add tracking info" on that order's row
+    8. If the "Combine orders" dialog appears, click "Combine orders and
+       continue" (it is skipped when there is nothing to combine)
+    9. Fill Tracking ID + Shipping provider, leave Receipt ID blank, and
+       click "Submit N parcel(s)"
+
+Fulfilment lookups go over HTTP (services/fulfilment/client.py); the browser
+is only needed for TikTok Seller Center itself.
+
 Uses the same persistent chrome_profile as the other extractors. First run
 requires a one-time manual login to TikTok Seller Center in the opened
 browser window; the session persists afterwards.
@@ -17,6 +27,15 @@ browser window; the session persists afterwards.
 Usage:
     python tiktok_toship_export_raw.py              # visible browser
     python tiktok_toship_export_raw.py --headless   # after login is saved
+
+    # verify the Add tracking info flow without submitting anything:
+    python tiktok_toship_export_raw.py --tracking-test <order_id> <tracking> [carrier]
+    #   ... and add --submit to actually send it
+
+Environment toggles:
+    TIKTOK_UPLOAD_DRY_RUN=1         fill the tracking page but never Submit
+    TIKTOK_UPLOAD_USE_TEMPLATE=1    deprecated xlsx template upload path
+    TIKTOK_FULFILMENT_USE_BROWSER=1 deprecated Selenium fulfilment lookups
 """
 
 import csv
@@ -849,17 +868,26 @@ def run_fulfilment_phase(driver, headless, found):
     return results
 
 
-def run_upload_phase(driver, results):
+def run_upload_phase(driver, results, dry_run=None):
     """Phase 4: submit found tracking back to TikTok Seller Center.
 
     Builds the shipment list from Phase 3 results (only orders that are
-    actually shipped and have a tracking number), then downloads the
-    Seller Center template, fills it, and uploads it.
+    actually shipped and have a tracking number), then submits each one
+    through the Seller Center UI:
+
+        To ship list -> Add tracking info -> [Combine orders] -> Submit parcel
+
+    Set TIKTOK_UPLOAD_USE_TEMPLATE=1 to use the DEPRECATED template
+    download/fill/upload path instead.
+
+    dry_run: fill everything but stop before the final Submit click. Defaults
+    to the TIKTOK_UPLOAD_DRY_RUN env var, so a scheduled run submits for real
+    while a manual verification run can stop short.
     """
     log_phase("PHASE 4/4: Submit tracking to TikTok Seller Center")
     shipments = [
         {
-            "order_id": tiktok_id,
+            "order_id": str(tiktok_id),
             "provider": tiktok_provider(info.get("carrier")),
             "tracking": info["tracking_number"],
         }
@@ -870,18 +898,436 @@ def run_upload_phase(driver, results):
         log.info("No shipped orders with tracking — nothing to upload to TikTok.")
         return None
 
-    log.info("Uploading tracking for %d order(s) to TikTok ...", len(shipments))
+    log.info("Submitting tracking for %d order(s) to TikTok ...", len(shipments))
     for s in shipments:
         log.info("  order %s -> %s (%s)", s["order_id"], s["tracking"], s["provider"])
-    template = download_ship_template(driver)
-    filled = fill_ship_template(template, shipments)
-    ok, verdict = upload_ship_file(driver, filled)
-    log.info("TikTok upload %s: %s", "SUCCEEDED" if ok else "did not confirm", verdict)
-    return ok
+
+    if os.environ.get("TIKTOK_UPLOAD_USE_TEMPLATE", "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        log.warning("TIKTOK_UPLOAD_USE_TEMPLATE=1 — using the DEPRECATED "
+                    "template upload path.")
+        template = download_ship_template(driver)
+        filled = fill_ship_template(template, shipments)
+        ok, verdict = upload_ship_file(driver, filled)
+        log.info("TikTok upload %s: %s", "SUCCEEDED" if ok else "did not confirm", verdict)
+        return ok
+
+    if dry_run is None:
+        dry_run = os.environ.get("TIKTOK_UPLOAD_DRY_RUN", "").strip().lower() in (
+            "1", "true", "yes", "on")
+    return submit_tracking_via_ui(driver, shipments, dry_run=dry_run)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — per-order "Add tracking info" flow (Seller Center UI)
+# ---------------------------------------------------------------------------
+
+ORDER_ID_RE = r"\b\d{15,}\b"
+
+
+def _row_container(driver, el, needle_re=ORDER_ID_RE):
+    """
+    Climb from `el` to the nearest ancestor that looks like a table row.
+
+    Seller Center renders these grids as nested divs as often as real <tr>s,
+    so anchoring on a tag name is unreliable. Instead climb until the ancestor
+    contains an order-id-shaped number, which is what makes a row a row here.
+    """
+    return driver.execute_script(
+        """
+        var el = arguments[0], re = new RegExp(arguments[1]);
+        var node = el;
+        for (var i = 0; i < 8 && node && node.parentElement; i++) {
+            node = node.parentElement;
+            if (re.test(node.textContent || '')) return node;
+        }
+        return null;
+        """,
+        el, needle_re,
+    )
+
+
+def _find_order_row(driver, order_id):
+    """Return the To-ship list row element for `order_id`, or None."""
+    for el in driver.find_elements(
+            By.XPATH, f"//*[normalize-space(text())='{order_id}']"):
+        try:
+            row = _row_container(driver, el)
+            if row is not None:
+                return row
+        except WebDriverException:
+            continue
+    return None
+
+
+def _handle_combine_dialog(driver, order_id, known_orders):
+    """
+    Deal with the optional "Combine orders" dialog.
+
+    TikTok shows it when the same buyer/address has other shippable orders.
+    With nothing to combine it never appears, so it must be treated as
+    optional — never wait on it as if it were guaranteed.
+
+    Which button we press depends on whether we can cover everything in the
+    parcel. The orders grouped here are usually NOT all shipped yet: the buyer
+    ordered three times, Nic. Oud has shipped one. Combining them anyway would
+    put this order's tracking number on the other two, which are real customer
+    orders. So we only combine when every order in the dialog has its own
+    tracking; otherwise we take "Continue without combining" and pick the
+    others up on a later run, once they ship.
+
+    Set TIKTOK_ALWAYS_COMBINE=1 to always combine regardless.
+    """
+    dialog = find_visible(driver, "//*[normalize-space(text())='Combine orders']")
+    if dialog is None:
+        log.info("No Combine orders dialog (nothing to combine) — continuing.")
+        return
+
+    ids = driver.execute_script(
+        "return (document.body.textContent || '').match(/\\b\\d{15,}\\b/g) || [];")
+    listed = [i for i in dict.fromkeys(ids)]
+    unknown = [i for i in listed if i not in known_orders]
+
+    always = os.environ.get("TIKTOK_ALWAYS_COMBINE", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+    if unknown and not always:
+        log.warning("Combine orders dialog lists %d order(s) with no tracking of "
+                    "their own (%s) — combining would put %s's tracking on them. "
+                    "Choosing 'Continue without combining'.",
+                    len(unknown), ", ".join(unknown[:5]), order_id)
+        button_text = "Continue without combining"
+    else:
+        if unknown and always:
+            log.warning("TIKTOK_ALWAYS_COMBINE=1 — combining despite %d order(s) "
+                        "without their own tracking.", len(unknown))
+        else:
+            log.info("Combine orders dialog: all %d order(s) have tracking — "
+                     "combining.", len(listed))
+        button_text = "Combine orders and continue"
+
+    btn = find_visible(
+        driver,
+        f"//*[self::button or self::div[@role='button'] or self::a]"
+        f"[contains(normalize-space(.), '{button_text}')]"
+        f"[not(.//*[contains(normalize-space(.), '{button_text}')])]",
+    )
+    if btn is None:
+        screenshot(driver, f"combine_dialog_{order_id}")
+        raise RuntimeError(f"Combine dialog shown but '{button_text}' button not found")
+
+    log.info("Clicking '%s'.", button_text)
+    js_click(driver, btn)
+    time.sleep(5)
+
+
+def open_add_tracking(driver, order_id, known_orders=()):
+    """
+    Click "Add tracking info" for one order and land on the tracking page.
+
+    known_orders: order ids we hold tracking for — used to decide whether
+    combining is safe (see _handle_combine_dialog).
+
+    Returns True if we reached the Add tracking info page.
+    """
+    driver.get(ORDERS_URL)
+    time.sleep(6)
+
+    row = _find_order_row(driver, order_id)
+    if row is None:
+        log.error("Order %s is not on the To ship list — cannot add tracking.", order_id)
+        screenshot(driver, f"order_not_listed_{order_id}")
+        return False
+
+    # The button only renders on row hover, so fire the hover first. It also
+    # sits next to a dropdown caret; take the button itself, not the caret.
+    driver.execute_script(
+        """
+        var row = arguments[0];
+        row.scrollIntoView({block: 'center'});
+        ['mouseover', 'mouseenter', 'mousemove'].forEach(function(t) {
+            row.dispatchEvent(new MouseEvent(t, {bubbles: true}));
+        });
+        """,
+        row,
+    )
+    time.sleep(1)
+
+    btn = driver.execute_script(
+        """
+        var row = arguments[0];
+        var nodes = row.querySelectorAll('button, a, div[role="button"], span');
+        for (var i = 0; i < nodes.length; i++) {
+            var t = (nodes[i].textContent || '').trim();
+            if (t === 'Add tracking info') return nodes[i];
+        }
+        for (var j = 0; j < nodes.length; j++) {
+            var s = (nodes[j].textContent || '').trim();
+            if (s.indexOf('Add tracking info') !== -1 && s.length < 40) return nodes[j];
+        }
+        return null;
+        """,
+        row,
+    )
+    if btn is None:
+        log.error("No 'Add tracking info' button in the row for %s "
+                  "(order may not be in an addable state).", order_id)
+        screenshot(driver, f"no_add_tracking_btn_{order_id}")
+        return False
+
+    js_click(driver, btn)
+    log.info("Clicked 'Add tracking info' for order %s", order_id)
+    time.sleep(4)
+
+    _handle_combine_dialog(driver, order_id, known_orders)
+
+    if not find_visible(driver, "//*[contains(normalize-space(text()), 'Add tracking info')]"):
+        log.error("Did not reach the Add tracking info page for %s", order_id)
+        screenshot(driver, f"no_tracking_page_{order_id}")
+        return False
+    return True
+
+
+def _select_shipping_provider(driver, row, provider):
+    """
+    Pick `provider` in a row's Shipping provider dropdown.
+
+    It is a custom widget, not a <select>, so the options render in a portal
+    appended to <body> — they can't be found by searching inside the row.
+    """
+    control = driver.execute_script(
+        """
+        var row = arguments[0];
+        var nodes = row.querySelectorAll('input, div, span');
+        for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i];
+            var txt = (n.getAttribute('placeholder') || n.textContent || '').trim();
+            if (txt.indexOf('Select shipping provider') !== -1) return n;
+        }
+        return null;
+        """,
+        row,
+    )
+    if control is None:
+        raise RuntimeError("Shipping provider control not found in row")
+
+    js_click(driver, control)
+    time.sleep(2)
+
+    # Some builds render a searchable combobox — typing narrows a long list.
+    try:
+        if control.tag_name == "input":
+            control.send_keys(provider)
+            time.sleep(2)
+    except WebDriverException:
+        pass
+
+    option = wait_for(
+        driver,
+        f"//*[@role='option' or contains(@class,'option') or self::li]"
+        f"[normalize-space(.)='{provider}']"
+        f"[not(.//*[normalize-space(.)='{provider}'])]",
+        20,
+        f"shipping provider option '{provider}'",
+    )
+    js_click(driver, option)
+    time.sleep(1)
+    log.info("    provider set to %s", provider)
+
+
+def _tracking_rows(driver):
+    """
+    Return [(row_element, tracking_input, [order_ids_in_row])] for the page.
+
+    A combined parcel puts several orders on the page, so each row is matched
+    to its own order rather than assuming a single one.
+    """
+    rows = []
+    for inp in driver.find_elements(
+            By.XPATH, "//input[@placeholder='Enter tracking ID']"):
+        try:
+            if not inp.is_displayed():
+                continue
+            row = _row_container(driver, inp)
+            if row is None:
+                continue
+            ids = driver.execute_script(
+                "return (arguments[0].textContent || '').match(/\\b\\d{15,}\\b/g) || [];",
+                row,
+            )
+            rows.append((row, inp, ids))
+        except WebDriverException:
+            continue
+    return rows
+
+
+class UnknownParcelOrder(RuntimeError):
+    """A parcel row belongs to an order we have no tracking for."""
+
+
+def fill_tracking_page(driver, by_order, fallback):
+    """
+    Fill every row on the Add tracking info page.
+
+    by_order: {order_id: shipment} for everything we have tracking for.
+    fallback: the shipment we opened the page with. Used only for a row whose
+              order ids could not be read at all — never to invent a tracking
+              number for a known-but-different order.
+
+    Raises UnknownParcelOrder if a row belongs to an order we have no tracking
+    for. Submitting one order's tracking against another customer's order is
+    worse than not submitting at all, so the caller skips the whole parcel and
+    retries on a later run.
+
+    Returns the set of order ids covered.
+    """
+    rows = _tracking_rows(driver)
+    if not rows:
+        raise RuntimeError("No tracking ID inputs found on the Add tracking info page")
+
+    log.info("  Add tracking info page has %d parcel row(s)", len(rows))
+
+    # Check every row before typing anything, so we never half-fill a page.
+    for _row, _inp, ids in rows:
+        if ids and not any(i in by_order for i in ids):
+            raise UnknownParcelOrder(
+                f"parcel row {ids} has no tracking of its own — refusing to "
+                f"submit {fallback['tracking']} against it")
+
+    filled = set()
+    for row, inp, ids in rows:
+        shipment = next((by_order[i] for i in ids if i in by_order), None) or fallback
+        inp.clear()
+        inp.send_keys(shipment["tracking"])
+        log.info("    order(s) %s -> tracking %s", ids or "?", shipment["tracking"])
+        _select_shipping_provider(driver, row, shipment["provider"])
+        # Receipt ID is optional — deliberately left blank.
+        filled.update(i for i in ids if i in by_order)
+
+    return filled
+
+
+def submit_parcels(driver, dry_run):
+    """Click "Submit N parcel(s)" and confirm. Returns (ok, verdict)."""
+    submit = find_visible(
+        driver,
+        "//*[self::button or self::div[@role='button']]"
+        "[contains(normalize-space(.), 'Submit') and contains(normalize-space(.), 'parcel')]"
+        "[not(.//*[contains(normalize-space(.), 'Submit')])]",
+    )
+    if submit is None:
+        screenshot(driver, "no_submit_button")
+        return False, "Submit parcel button not found"
+
+    label = (submit.text or "Submit").strip()
+    if dry_run:
+        screenshot(driver, "dry_run_before_submit")
+        log.warning("DRY RUN — everything is filled in but '%s' was NOT clicked.", label)
+        return True, f"dry run (stopped before '{label}')"
+
+    js_click(driver, submit)
+    log.info("  Clicked '%s'", label)
+    time.sleep(5)
+
+    # Some flows raise a confirmation dialog before committing.
+    confirm = find_visible(
+        driver,
+        "//*[self::button or self::div[@role='button']]"
+        "[normalize-space(.)='Confirm' or normalize-space(.)='Submit' or normalize-space(.)='OK']",
+    )
+    if confirm is not None:
+        log.info("  Confirmation dialog shown — confirming.")
+        js_click(driver, confirm)
+        time.sleep(5)
+
+    body = ""
+    try:
+        body = driver.find_element(By.TAG_NAME, "body").text.lower()
+    except WebDriverException:
+        pass
+    if "success" in body or "submitted" in body:
+        screenshot(driver, "submit_success")
+        return True, "submitted"
+    if "error" in body or "failed" in body or "invalid" in body:
+        screenshot(driver, "submit_error")
+        return False, "page reported an error"
+
+    # Leaving the tracking page is itself the success signal in most builds.
+    left_page = not find_visible(
+        driver, "//input[@placeholder='Enter tracking ID']")
+    screenshot(driver, "submit_result")
+    if left_page:
+        return True, "submitted (tracking page closed)"
+    return False, "no confirmation after submit"
+
+
+def submit_tracking_via_ui(driver, shipments, dry_run=False):
+    """
+    Phase 4: submit tracking one order at a time through the Seller Center UI.
+
+    Combining can cover several orders in a single pass, so anything already
+    submitted is skipped rather than opened again.
+    """
+    by_order = {s["order_id"]: s for s in shipments}
+    done, failed = set(), []
+
+    for shipment in shipments:
+        order_id = shipment["order_id"]
+        if order_id in done:
+            log.info("Order %s already submitted as part of a combined parcel — skipping.",
+                     order_id)
+            continue
+
+        log.info("-" * 60)
+        log.info("Order %s: tracking %s via %s",
+                 order_id, shipment["tracking"], shipment["provider"])
+        try:
+            if not open_add_tracking(driver, order_id, known_orders=set(by_order)):
+                failed.append(order_id)
+                continue
+            try:
+                covered = fill_tracking_page(driver, by_order, shipment)
+            except UnknownParcelOrder as exc:
+                log.warning("Order %s: skipped without submitting — %s. "
+                            "It will be retried once the other order(s) ship.",
+                            order_id, exc)
+                screenshot(driver, f"unknown_parcel_{order_id}")
+                failed.append(order_id)
+                continue
+            ok, verdict = submit_parcels(driver, dry_run)
+            if ok:
+                done.update(covered or {order_id})
+                done.add(order_id)
+                log.info("Order %s: %s (covered %d order(s))",
+                         order_id, verdict, len(covered or {order_id}))
+            else:
+                failed.append(order_id)
+                log.error("Order %s: submit failed — %s", order_id, verdict)
+        except Exception as exc:
+            log.exception("Order %s: tracking submission failed: %s", order_id, exc)
+            screenshot(driver, f"tracking_fail_{order_id}")
+            failed.append(order_id)
+
+    log.info("=" * 70)
+    log.info("TikTok tracking submission: %d/%d order(s) done%s",
+             len(done & set(by_order)), len(shipments),
+             " (DRY RUN — nothing was actually submitted)" if dry_run else "")
+    if failed:
+        log.warning("Failed order(s): %s", ", ".join(failed))
+    return not failed
+
+
+# ---------------------------------------------------------------------------
+# DEPRECATED — bulk template download / fill / upload
+# ---------------------------------------------------------------------------
+#
+# Superseded by submit_tracking_via_ui() above, which drives the per-order
+# "Add tracking info" flow instead of moving an xlsx around. Kept working and
+# reachable via TIKTOK_UPLOAD_USE_TEMPLATE=1.
 
 
 def download_ship_template(driver):
-    """Phase 4a: download the shipping-upload template from Seller Center."""
+    """DEPRECATED (template path). Download the shipping-upload template."""
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     driver.execute_cdp_cmd(
         "Browser.setDownloadBehavior",
@@ -1052,8 +1498,39 @@ def upload_ship_file(driver, file_path):
     return False, "no confirmation after final submit"
 
 
+def tracking_ui_test(order_id, tracking, carrier, headless, dry_run=True):
+    """
+    Exercise the Add tracking info flow for ONE order.
+
+    Defaults to a dry run: it opens the order, walks the Combine orders dialog
+    if it appears, fills the tracking ID and shipping provider, and stops with
+    everything staged but the Submit button NOT clicked. Pass --submit to go
+    through with it.
+    """
+    log.info("TEST MODE: Add tracking info for TikTok order %s (%s via %s)%s",
+             order_id, tracking, carrier, "  [DRY RUN]" if dry_run else "  [WILL SUBMIT]")
+    manager = BrowserManager(profile_dir=str(PROJECT_ROOT / "chrome_profile"))
+    driver = manager.start_browser(headless=headless)
+    try:
+        ensure_logged_in(driver, headless)
+        ok = submit_tracking_via_ui(driver, [{
+            "order_id": str(order_id),
+            "provider": tiktok_provider(carrier),
+            "tracking": tracking,
+        }], dry_run=dry_run)
+        log.info("Tracking UI test %s", "passed" if ok else "FAILED")
+        return ok
+    except Exception:
+        log.exception("Tracking UI test failed")
+        screenshot(driver, "tracking_ui_test_failure")
+        raise
+    finally:
+        manager.close()
+
+
 def upload_test(headless):
-    """Test the shipping-upload mechanics with an already-shipped order.
+    """DEPRECATED (template path). Test the shipping-upload mechanics with an
+    already-shipped order.
 
     Uses the completed order 576907531018934637 with its REAL PostNL
     tracking — TikTok should reject it (already shipped), which safely
@@ -1116,6 +1593,22 @@ def main():
     # with an already-shipped order (safe — TikTok rejects duplicates).
     if "--upload-test" in sys.argv:
         upload_test(headless)
+        return
+
+    # Test mode: --tracking-test <order_id> <tracking> [carrier] drives the
+    # Add tracking info flow for a single order. Dry run unless --submit is
+    # also passed, so it can be verified without touching a real order.
+    if "--tracking-test" in sys.argv:
+        idx = sys.argv.index("--tracking-test")
+        if idx + 2 >= len(sys.argv):
+            print("Usage: python tiktok_toship_export_raw.py --tracking-test "
+                  "<tiktok_order_id> <tracking_id> [carrier] [--submit]")
+            sys.exit(2)
+        carrier = "PostNL"
+        if idx + 3 < len(sys.argv) and not sys.argv[idx + 3].startswith("--"):
+            carrier = sys.argv[idx + 3]
+        tracking_ui_test(sys.argv[idx + 1], sys.argv[idx + 2], carrier,
+                         headless, dry_run="--submit" not in sys.argv)
         return
 
     # Test mode: --fulfilment-test <tiktok_order_id> skips the TikTok export

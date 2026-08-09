@@ -682,7 +682,10 @@ def download_ship_template(driver):
     before = {p.name for p in DOWNLOAD_DIR.glob("*.xlsx")}
 
     driver.get(SHIP_UPLOAD_URL)
-    btn = wait_for(driver, "//button[.//text()[normalize-space()='Download template']]",
+    btn = wait_for(driver,
+                   "//*[self::button or self::a or self::span or self::div]"
+                   "[contains(normalize-space(.), 'Download template')]"
+                   "[not(.//*[contains(normalize-space(.), 'Download template')])]",
                    60, "Download template button")
     js_click(driver, btn)
     log.info("Clicked Download template — waiting for the xlsx file.")

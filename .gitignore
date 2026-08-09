@@ -72,3 +72,7 @@ config.db
 
 # JSON report outputs
 order_type_report_*.json
+
+# Supervisor's timestamped copies of source files it patches — regenerated
+# on each run, and git already holds the history.
+supervisor/backups/

@@ -350,11 +350,192 @@ def match_orders_in_shopify(records):
     return found, missing
 
 
+# ===========================================================================
+# Phase 3 — my-fulfilment.com lookup (Nic. Oud portal)
+# ===========================================================================
+#
+# This runs over the portal's HTTP API via services/fulfilment/client.py:
+# one form-POST login, then plain GET requests. No browser, no page loads,
+# no waiting on the Filters panel to render.
+#
+# Everything below the "DEPRECATED" banner further down is the original
+# Selenium implementation. It is kept intact and still works — set
+# TIKTOK_FULFILMENT_USE_BROWSER=1 to fall back to it — but it is no longer
+# the path this workflow takes.
+#
+# The two produce the same dict shape on purpose; see fulfilment_lookup_api.
+
+
+def _use_browser_fulfilment():
+    """True if the deprecated Selenium fulfilment path is explicitly requested."""
+    return os.environ.get("TIKTOK_FULFILMENT_USE_BROWSER", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+_myf_client = None
+
+
+def get_fulfilment_client():
+    """
+    Return a logged-in MyFulfilmentClient, creating it on first use.
+
+    One session is reused for every lookup in the run — the portal serialises
+    requests sharing a PHPSESSID anyway, so a second session would buy nothing
+    here (see services/fulfilment/pool.py for why parallelism needs separate
+    logins). The cookie is cached to fulfilment_session.cookies, so repeat runs
+    usually skip the login round-trip entirely.
+    """
+    global _myf_client
+    if _myf_client is None:
+        from services.fulfilment import client as myf
+        c = myf.MyFulfilmentClient()
+        if not c.is_logged_in():
+            log.info("Logging in to my-fulfilment.com ...")
+            c.login()
+            log.info("my-fulfilment.com login successful.")
+        else:
+            log.info("Reusing cached my-fulfilment.com session.")
+        _myf_client = c
+    return _myf_client
+
+
+def close_fulfilment_client():
+    """
+    Release the shared client at the end of a run.
+
+    Mirrors MyFulfilmentClient.__exit__: the session cookie MUST be saved
+    before closing, otherwise the next run pays for a fresh login. There is
+    no close() method on the client — don't "simplify" this to one.
+    """
+    global _myf_client
+    if _myf_client is not None:
+        try:
+            _myf_client.save_session()
+            _myf_client.session.close()
+        except Exception as exc:
+            log.debug("Ignoring error while closing fulfilment session: %s", exc)
+        _myf_client = None
+
+
+def fulfilment_lookup_api(reference):
+    """
+    Look up an order in my-fulfilment.com over HTTP.
+
+    Returns exactly the same dict that the deprecated Selenium
+    fulfilment_lookup() returned, so log_fulfilment_result() and
+    run_upload_phase() consume it unchanged:
+
+        reference        the reference we searched for
+        order_row        grid row, keyed by the portal's column headings
+        detail_url       link to the order's /show or /edit page
+        order_lines      list of dicts, keyed by the detail table headings
+        packages         list of dicts, keyed by the detail table headings
+        tracking         [{"text", "url"}] carrier links only
+        carrier          Shipper of the first tracked package
+        tracking_number  its TNT code
+        shipped          whether a tracking number was found
+
+    Returns None when no order matches, same as before.
+    """
+    client = get_fulfilment_client()
+    row = client.find_order(reference)
+    if row is None:
+        log.warning("No fulfilment order found for reference %s", reference.lstrip("#"))
+        return None
+
+    # Keys mirror the portal's grid headings, because log_fulfilment_result()
+    # reads them by those names.
+    summary = {
+        "reference": reference,
+        "order_row": {
+            "Nic. Oud reference": row.wms_reference,
+            "Reference": row.reference,
+            "Status": row.status,
+            "Name": row.name,
+            "Address": row.address,
+            "City": row.city,
+            "Country": row.country,
+            "Lines": row.lines,
+            "Created at": row.created_at,
+            "Modified at": row.modified_at,
+        },
+    }
+
+    if not row.detail_url:
+        log.warning("Fulfilment order row found for %s but no detail link",
+                    reference.lstrip("#"))
+        return summary
+
+    detail = client.get_order_detail(row)
+    summary["detail_url"] = detail.url
+    summary["order_lines"] = [
+        {
+            "Article code": line.article_code,
+            "Article description": line.description,
+            "Value": line.value,
+            "Serial numbers": line.serial_numbers,
+            "Ordered": line.ordered,
+            "Shipped": line.shipped,
+            "Open": line.open,
+        }
+        for line in detail.lines
+    ]
+    summary["packages"] = [
+        {
+            "Shipping date": pkg.shipping_date,
+            "Shipper": pkg.shipper,
+            "Shipping method": pkg.shipping_method,
+            "Weight": pkg.weight,
+            "TNT-Code": pkg.tnt_code,
+        }
+        for pkg in detail.packages
+    ]
+    # The portal renders each T&T code as a real carrier link carrying the
+    # postcode/country params the carrier needs — keep those, drop any link
+    # that points back into the portal (those are column sort links).
+    summary["tracking"] = [
+        {"text": pkg.tnt_code, "url": pkg.tnt_url}
+        for pkg in detail.packages
+        if pkg.tnt_url and "my-fulfilment.com" not in pkg.tnt_url
+    ]
+
+    # First tracked package wins — these two feed the TikTok upload in phase 4.
+    # NOTE: is_tracked also rejects a literal "-", which the portal writes for
+    # non-tracked delivery modes. The old Selenium path treated "-" as a real
+    # tracking number and would have uploaded it to TikTok.
+    summary["carrier"] = ""
+    summary["tracking_number"] = ""
+    for pkg in detail.packages:
+        if pkg.is_tracked:
+            summary["carrier"] = (pkg.shipper or "").strip()
+            summary["tracking_number"] = pkg.tnt_code.strip()
+            break
+    summary["shipped"] = bool(summary["tracking_number"])
+    return summary
+
+
+# ===========================================================================
+# DEPRECATED — Selenium my-fulfilment.com navigation
+# ===========================================================================
+#
+# Superseded by fulfilment_lookup_api() above, which talks to the portal over
+# HTTP instead of driving it through Chrome. Kept because it still works and
+# is the documented fallback (TIKTOK_FULFILMENT_USE_BROWSER=1) if the portal
+# changes in a way the HTTP client can't follow.
+#
+# Everything from here to run_fulfilment_phase() is part of that old path:
+#   _load_fulfilment_creds, _fulfilment_session_ok, _fulfilment_auto_login,
+#   ensure_fulfilment_logged_in, _read_table, _load_fulfilment_page,
+#   fulfilment_lookup
+#
+# Note it has its own credential loading and its own login form handling,
+# separate from services/fulfilment/client.py.
+
 FULFILMENT_LOGIN_URL = "https://www.my-fulfilment.com/login"
 
 
 def _load_fulfilment_creds():
-    """Read my-fulfilment.com login from env vars or fulfilment.env."""
+    """DEPRECATED (browser path). Read my-fulfilment.com login from env vars or fulfilment.env."""
     email = os.getenv("MYFULFILMENT_EMAIL")
     password = os.getenv("MYFULFILMENT_PASSWORD")
     env_file = PROJECT_ROOT / "fulfilment.env"
@@ -371,7 +552,7 @@ def _load_fulfilment_creds():
 
 
 def _fulfilment_session_ok(driver):
-    """True if the orders page is loaded with a valid session."""
+    """DEPRECATED (browser path). True if the orders page is loaded with a valid session."""
     try:
         body = driver.find_element(By.TAG_NAME, "body").text
     except WebDriverException:
@@ -385,6 +566,7 @@ def _fulfilment_session_ok(driver):
     return True
 
 
+# DEPRECATED (browser path) — see services/fulfilment/client.py login().
 def _fulfilment_auto_login(driver):
     """Fill the login form from creds, tick 'Remember me', submit."""
     from selenium.webdriver.common.keys import Keys
@@ -437,7 +619,9 @@ def _fulfilment_auto_login(driver):
 
 
 def ensure_fulfilment_logged_in(driver, headless):
-    """Ensure a valid my-fulfilment.com session, auto-logging in if needed.
+    """DEPRECATED (browser path) — the HTTP client logs itself in.
+
+    Ensure a valid my-fulfilment.com session, auto-logging in if needed.
 
     The portal serves a stale session as an HTTP 500 on /orders/ rather than
     a clean login redirect, so we detect that and re-authenticate from creds.
@@ -462,7 +646,7 @@ def ensure_fulfilment_logged_in(driver, headless):
 
 
 def _read_table(driver, heading):
-    """Parse the first table following a section heading into row dicts."""
+    """DEPRECATED (browser path). Parse the first table following a section heading into row dicts."""
     table = find_visible(driver, f"//*[normalize-space(text())='{heading}']/following::table[1]")
     if not table:
         return [], []
@@ -479,7 +663,7 @@ def _read_table(driver, heading):
 
 
 def _load_fulfilment_page(driver, url, attempts=4):
-    """Navigate to a my-fulfilment.com page, retrying on a transient HTTP 500.
+    """DEPRECATED (browser path). Navigate to a my-fulfilment.com page, retrying on a transient HTTP 500.
 
     The portal intermittently returns a "This page isn't working / HTTP ERROR
     500" page; a reload after a short wait usually fixes it.
@@ -503,7 +687,10 @@ def _load_fulfilment_page(driver, url, attempts=4):
 
 
 def fulfilment_lookup(driver, reference):
-    """Filter my-fulfilment.com orders by reference and pull full details.
+    """DEPRECATED — superseded by fulfilment_lookup_api(), which does the same
+    lookup over HTTP and returns the identical dict shape.
+
+    Filter my-fulfilment.com orders by reference and pull full details.
 
     Returns a dict with the result row, order lines, packages and tracking
     link(s), or None if no order matches the reference.
@@ -616,20 +803,41 @@ def log_fulfilment_result(tiktok_id, shopify_name, info):
 
 
 def run_fulfilment_phase(driver, headless, found):
-    """Phase 3: look up each Shopify-matched order in my-fulfilment.com."""
+    """Phase 3: look up each Shopify-matched order in my-fulfilment.com.
+
+    Uses the portal's HTTP API. `driver` and `headless` are still accepted so
+    callers don't change, and are only used by the deprecated browser path
+    (TIKTOK_FULFILMENT_USE_BROWSER=1).
+    """
     log_phase("PHASE 3/3: Look up tracking in my-fulfilment.com")
     log.info("Checking %d matched order(s) for tracking ...", len(found))
-    ensure_fulfilment_logged_in(driver, headless)
+
+    use_browser = _use_browser_fulfilment()
+    if use_browser:
+        log.warning("TIKTOK_FULFILMENT_USE_BROWSER=1 — using the DEPRECATED "
+                    "Selenium fulfilment path.")
+        ensure_fulfilment_logged_in(driver, headless)
+    else:
+        log.info("Fulfilment lookups via my-fulfilment.com API (no browser).")
+
     results = []
-    for item in found:
-        name = item["shopify_order"]["name"]
-        try:
-            info = fulfilment_lookup(driver, name)
-        except Exception as exc:
-            log.error("Fulfilment lookup failed for %s: %s", name, exc)
-            screenshot(driver, f"fulfilment_fail_{name.lstrip('#')}")
-            info = None
-        results.append((item["tiktok_id"], name, info))
+    try:
+        for item in found:
+            name = item["shopify_order"]["name"]
+            try:
+                if use_browser:
+                    info = fulfilment_lookup(driver, name)
+                else:
+                    info = fulfilment_lookup_api(name)
+            except Exception as exc:
+                log.error("Fulfilment lookup failed for %s: %s", name, exc)
+                if use_browser:
+                    screenshot(driver, f"fulfilment_fail_{name.lstrip('#')}")
+                info = None
+            results.append((item["tiktok_id"], name, info))
+    finally:
+        if not use_browser:
+            close_fulfilment_client()
 
     shipped = sum(1 for _, _, info in results if info and info.get("shipped"))
     log_phase("FINAL SUMMARY")

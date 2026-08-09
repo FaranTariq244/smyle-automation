@@ -18,15 +18,38 @@ def run_add_tracker_report(date_obj, date_str):
     return _run_add_tracker(date_obj, date_str)
 
 
+def _datads_use_api() -> bool:
+    """
+    Whether DataAds extraction goes through the public API (default) or the
+    legacy Selenium/UI scraper.
+
+    Every DataAds run — manual and scheduled — funnels through the two wrappers
+    below, so this single setting switches all of them at once. Set
+    DATADS_USE_API to "0"/"false" to fall back to the browser path.
+    """
+    from config_store import get_setting
+    # An unset or empty value means "not configured" -> API.
+    value = (get_setting("DATADS_USE_API", "1") or "1").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
 def run_datads_report(date_obj, date_str):
-    """Run the DataAds report extraction."""
-    from datads_data_extractor import run_datads_report as _run_datads
+    """Run the DataAds report extraction (API by default, UI scraper as fallback)."""
+    if _datads_use_api():
+        from datads_api_extractor import run_datads_report as _run_datads
+    else:
+        print("[DATADS] DATADS_USE_API is off — using the legacy browser scraper.")
+        from datads_data_extractor import run_datads_report as _run_datads
     return _run_datads(date_obj, date_str)
 
 
 def run_datads_weekly_report(start_date_obj, end_date_obj, start_date_str, end_date_str):
     """Run the DataAds weekly report extraction with date range."""
-    from datads_data_extractor import run_datads_weekly_report as _run_weekly
+    if _datads_use_api():
+        from datads_api_extractor import run_datads_weekly_report as _run_weekly
+    else:
+        print("[DATADS] DATADS_USE_API is off — using the legacy browser scraper.")
+        from datads_data_extractor import run_datads_weekly_report as _run_weekly
     return _run_weekly(start_date_obj, end_date_obj, start_date_str, end_date_str)
 
 

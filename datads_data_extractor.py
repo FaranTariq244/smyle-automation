@@ -292,16 +292,24 @@ class DataAdsDataExtractor:
             if not self._is_calendar_open():
                 raise Exception("Date picker calendar did not open after clicking")
 
-    # JavaScript to click a day using <time datetime="YYYY-M-D"> elements.
-    # The calendar uses 0-indexed months in datetime attrs (JS-style: 0=Jan, 11=Dec).
-    # We also filter by X-position to ensure we click in the correct month panel,
-    # not an overflow day from an adjacent month.
+    # JavaScript to click a day using the calendar's <time datetime="..."> elements.
+    #
+    # The datetime attribute format is NOT assumed: DataAds has shipped both
+    # 0-indexed unpadded months (JS-style, "2026-7-8") and ISO 1-indexed padded
+    # months ("2026-08-08"). Hard-coding either one breaks on the next change and,
+    # worse, can silently click the wrong month (0-indexed "2026-07-08" is a valid
+    # ISO date — July 8 — so a stale assumption picks a real but wrong day).
+    #
+    # Instead we locate the target month's panel by X-position, then read the month
+    # encoding off that panel's own cells: whatever (year, month) pair the majority
+    # of its cells carry IS this month, in whatever encoding the app is using.
+    # Overflow days from adjacent months fall out automatically since they carry a
+    # different pair.
     _JS_CLICK_DAY = """
-    var year = arguments[0];
-    var jsMonth = arguments[1];
-    var day = arguments[2];
+    var targetYear = arguments[0];
+    var targetMonth = arguments[1];   // 1-indexed, human style
+    var targetDay = arguments[2];
     var targetMonthHeader = arguments[3];
-    var dateAttr = year + '-' + jsMonth + '-' + day;
 
     var monthHeaders = [];
     document.querySelectorAll('h2').forEach(function(h) {
@@ -317,43 +325,76 @@ class DataAdsDataExtractor:
     for (var i = 0; i < monthHeaders.length; i++) {
         if (monthHeaders[i].text === targetMonthHeader) { targetIdx = i; break; }
     }
-    var xMin = 0, xMax = 99999;
-    if (targetIdx >= 0) {
-        if (targetIdx > 0)
-            xMin = (monthHeaders[targetIdx - 1].centerX + monthHeaders[targetIdx].centerX) / 2;
-        if (targetIdx + 1 < monthHeaders.length)
-            xMax = (monthHeaders[targetIdx].centerX + monthHeaders[targetIdx + 1].centerX) / 2;
-    }
 
-    var allMatches = [];
-    document.querySelectorAll('time[datetime="' + dateAttr + '"]').forEach(function(t) {
-        if (t.offsetParent !== null) {
-            var btn = t.closest('button') || t.parentElement;
-            var rect = btn.getBoundingClientRect();
-            allMatches.push({element: btn, centerX: rect.x + rect.width / 2});
-        }
+    var cells = [];
+    document.querySelectorAll('time[datetime]').forEach(function(t) {
+        if (t.offsetParent === null) return;
+        var raw = t.getAttribute('datetime');
+        var m = /^(\\d{4})-(\\d{1,2})-(\\d{1,2})$/.exec(raw);
+        if (!m) return;
+        var btn = t.closest('button') || t.parentElement;
+        var rect = btn.getBoundingClientRect();
+        cells.push({
+            element: btn, raw: raw,
+            year: parseInt(m[1], 10), month: parseInt(m[2], 10), day: parseInt(m[3], 10),
+            centerX: rect.x + rect.width / 2
+        });
     });
 
-    if (allMatches.length === 0) {
-        var allTimes = [];
-        document.querySelectorAll('time[datetime]').forEach(function(t) {
-            if (t.offsetParent !== null) allTimes.push(t.getAttribute('datetime'));
-        });
-        return {error: 'No <time> for ' + dateAttr, visibleDates: allTimes.slice(0, 20)};
-    }
+    if (cells.length === 0)
+        return {error: 'No parseable <time datetime> cells visible in the calendar'};
 
-    var inRange = allMatches.filter(function(m) { return m.centerX >= xMin && m.centerX <= xMax; });
-    if (inRange.length === 0 && targetIdx >= 0) {
-        var tgtX = monthHeaders[targetIdx].centerX;
-        inRange = [allMatches[0]];
-        for (var m of allMatches) {
-            if (Math.abs(m.centerX - tgtX) < Math.abs(inRange[0].centerX - tgtX)) inRange = [m];
-        }
-    }
-    if (inRange.length === 0) inRange = allMatches;
+    if (targetIdx < 0)
+        return {error: 'Month panel "' + targetMonthHeader + '" not found among visible headers',
+                headers: monthHeaders.map(function(h) { return h.text; })};
 
-    inRange[0].element.click();
-    return {success: true, clicked: dateAttr, totalMatches: allMatches.length, inRange: inRange.length};
+    var xMin = 0, xMax = 99999;
+    if (targetIdx > 0)
+        xMin = (monthHeaders[targetIdx - 1].centerX + monthHeaders[targetIdx].centerX) / 2;
+    if (targetIdx + 1 < monthHeaders.length)
+        xMax = (monthHeaders[targetIdx].centerX + monthHeaders[targetIdx + 1].centerX) / 2;
+
+    var panel = cells.filter(function(c) { return c.centerX >= xMin && c.centerX <= xMax; });
+    if (panel.length === 0 && monthHeaders.length === 1) {
+        // Single month on screen: the X split is meaningless but also unnecessary,
+        // since every visible cell belongs to that one panel.
+        panel = cells;
+    }
+    if (panel.length === 0)
+        return {error: 'No day cells found inside the "' + targetMonthHeader + '" panel',
+                visibleDates: cells.slice(0, 20).map(function(c) { return c.raw; })};
+
+    // The (year, month) pair carried by most of this panel's cells is this month,
+    // whatever encoding the app uses. Ties are impossible: a month panel always
+    // holds 28-31 of its own days against at most 6 overflow days per neighbour.
+    var tally = {}, dominant = null;
+    panel.forEach(function(c) {
+        var key = c.year + '-' + c.month;
+        tally[key] = (tally[key] || 0) + 1;
+        if (dominant === null || tally[key] > tally[dominant]) dominant = key;
+    });
+    var domYear = parseInt(dominant.split('-')[0], 10);
+    var domMonth = parseInt(dominant.split('-')[1], 10);
+
+    // Sanity check the decoded offset: 0 = ISO 1-indexed, 1 = JS 0-indexed.
+    // Anything else means the panel or the attribute format is not what we think.
+    var offset = (targetYear * 12 + targetMonth) - (domYear * 12 + domMonth);
+    if (offset !== 0 && offset !== 1)
+        return {error: 'Panel "' + targetMonthHeader + '" carries unexpected dates (' +
+                       dominant + '); month encoding could not be determined',
+                visibleDates: panel.slice(0, 20).map(function(c) { return c.raw; })};
+
+    var matches = panel.filter(function(c) {
+        return c.year === domYear && c.month === domMonth && c.day === targetDay;
+    });
+
+    if (matches.length === 0)
+        return {error: 'Day ' + targetDay + ' not found in the "' + targetMonthHeader + '" panel',
+                panelDates: panel.map(function(c) { return c.raw; }).slice(0, 40)};
+
+    matches[0].element.click();
+    return {success: true, clicked: matches[0].raw, monthOffset: offset,
+            panelCells: panel.length, matches: matches.length};
     """
 
     def _navigate_and_click_date(self, target_date):
@@ -397,14 +438,13 @@ class DataAdsDataExtractor:
             raise Exception(f"Could not navigate calendar to {target_header}")
 
         # Click the day using JS with <time datetime> and X-position filtering.
-        # The datetime attribute uses 0-indexed months (JS-style), so subtract 1.
-        js_month = target_date.month - 1
+        # Months are passed 1-indexed; the JS decodes the page's own encoding.
         result = self.driver.execute_script(
-            self._JS_CLICK_DAY, target_year, js_month, target_date.day, target_header
+            self._JS_CLICK_DAY, target_year, target_date.month, target_date.day, target_header
         )
 
         if result and result.get('success'):
-            print(f"[DATE] Clicked day {target_date.day}")
+            print(f"[DATE] Clicked day {target_date.day} (datetime='{result.get('clicked')}')")
         else:
             raise Exception(f"Could not click day {target_date.day}: {result}")
 

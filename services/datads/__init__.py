@@ -1,0 +1,1 @@
+"""DatAds public API integration."""

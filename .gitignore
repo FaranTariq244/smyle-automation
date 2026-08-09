@@ -24,6 +24,9 @@ bigquery_sa.json
 shopify.env
 shopify-connection.env
 
+# DatAds public API key — never commit
+datads.env
+
 # my-fulfilment.com (Nic. Oud) portal login — never commit
 fulfilment.env
 # Cached portal session cookies — live credentials, same as the password.

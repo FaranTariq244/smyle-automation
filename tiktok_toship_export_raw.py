@@ -924,26 +924,174 @@ def run_upload_phase(driver, results, dry_run=None):
 
 ORDER_ID_RE = r"\b\d{15,}\b"
 
+# Collect order ids from a subtree (or the whole document when scope is null).
+#
+# Do NOT regex textContent for this. Concatenated textContent glues an order id
+# to its neighbours — "...Shipped by seller576933471526951296" then "1 item" —
+# so \b\d{15,}\b finds nothing (no word boundary between "r" and "5") or worse,
+# matches a corrupted "5769334715269512961" made of the id plus the next digit.
+# Seller Center puts every id in its own leaf element (class order_id_number),
+# so match leaves whose entire text is the id and nothing else.
+_ORDER_IDS_JS = """
+var scope = arguments[0] || document;
+var out = [];
+var nodes = scope.querySelectorAll('*');
+for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i];
+    if (n.children.length) continue;                 // leaves only
+    var t = (n.textContent || '').trim();
+    if (/^\\d{15,}$/.test(t)) out.push(t);
+}
+return Array.from(new Set(out));
+"""
 
-def _row_container(driver, el, needle_re=ORDER_ID_RE):
+
+def order_ids_in(driver, scope=None):
+    """Return the distinct order ids rendered inside `scope` (default: page)."""
+    return driver.execute_script(_ORDER_IDS_JS, scope) or []
+
+# The order-id element is a ~21px text line while list rows sit ~104px apart,
+# and the action button renders a little below that line. Half the row pitch
+# is therefore the widest a match can be while still being unambiguous.
+ROW_MATCH_TOLERANCE_PX = 50
+
+
+def _row_container(driver, el):
     """
-    Climb from `el` to the nearest ancestor that looks like a table row.
+    Climb from `el` to the element that represents its whole table row.
 
-    Seller Center renders these grids as nested divs as often as real <tr>s,
-    so anchoring on a tag name is unreliable. Instead climb until the ancestor
-    contains an order-id-shaped number, which is what makes a row a row here.
+    Seller Center renders these grids as nested divs as often as real <tr>s, so
+    anchoring on a tag name is unreliable.
+
+    Do NOT stop at the first ancestor containing an order id — that is just the
+    Order cell, and the row's action buttons live in a different cell entirely.
+    Instead keep climbing while the subtree still contains only THIS order id,
+    and take the last one that holds. The first ancestor to pull in a second
+    order id is the table body, so the one before it is the row.
     """
     return driver.execute_script(
         """
-        var el = arguments[0], re = new RegExp(arguments[1]);
-        var node = el;
-        for (var i = 0; i < 8 && node && node.parentElement; i++) {
-            node = node.parentElement;
-            if (re.test(node.textContent || '')) return node;
+        var el = arguments[0];
+
+        function ids(node) {
+            var out = [];
+            var nodes = node.querySelectorAll('*');
+            for (var i = 0; i < nodes.length; i++) {
+                var n = nodes[i];
+                if (n.children.length) continue;
+                var t = (n.textContent || '').trim();
+                if (/^\\d{15,}$/.test(t)) out.push(t);
+            }
+            var self = (node.textContent || '').trim();
+            if (!node.children.length && /^\\d{15,}$/.test(self)) out.push(self);
+            return Array.from(new Set(out));
         }
-        return null;
+
+        // The id this element belongs to (search up until we see exactly one).
+        var own = null, probe = el;
+        for (var i = 0; i < 6 && probe; i++) {
+            var f = ids(probe);
+            if (f.length === 1) { own = f[0]; break; }
+            probe = probe.parentElement;
+        }
+        if (!own) return null;
+
+        var node = probe, best = probe;
+        for (var j = 0; j < 12 && node && node.parentElement; j++) {
+            node = node.parentElement;
+            var f2 = ids(node);
+            if (f2.length === 1 && f2[0] === own) best = node;
+            else if (f2.length > 1) break;   // reached the table body
+        }
+        return best;
         """,
-        el, needle_re,
+        el,
+    )
+
+
+_FIND_BY_TEXT_JS = """
+var scope = arguments[0] || document;
+var pattern = arguments[1];
+var isRegex = arguments[2];
+var re = isRegex ? new RegExp(pattern) : null;
+
+function norm(node) {
+    return (node.textContent || '').replace(/\\s+/g, ' ').trim();
+}
+function hit(text) {
+    return isRegex ? re.test(text) : text === pattern;
+}
+
+var out = [];
+var nodes = scope.querySelectorAll('*');
+for (var i = 0; i < nodes.length; i++) {
+    var node = nodes[i];
+    if (node.offsetParent === null) continue;              // not rendered
+    var text = norm(node);
+    if (!text || text.length > 120) continue;              // prune containers
+    if (!hit(text)) continue;
+    // Keep only the innermost element carrying the text: TikTok wraps button
+    // labels in a span, and clicking the span bubbles to the button anyway.
+    var inner = false;
+    var kids = node.querySelectorAll('*');
+    for (var j = 0; j < kids.length; j++) {
+        if (hit(norm(kids[j]))) { inner = true; break; }
+    }
+    if (!inner) out.push(node);
+}
+return out.length ? out[0] : null;
+"""
+
+
+def find_by_text(driver, pattern, scope=None, regex=False):
+    """
+    Return the innermost visible element whose text matches `pattern`.
+
+    Prefer this over an XPath like
+        //button[contains(., 'X')][not(.//*[contains(., 'X')])]
+    which cannot match TikTok's buttons at all: the <button> fails the
+    not-a-descendant test because its label sits in an inner <span>, and the
+    <span> fails the tag test. Clicking the inner element bubbles to the
+    button, so matching the innermost node is both simpler and correct.
+    """
+    return driver.execute_script(_FIND_BY_TEXT_JS, scope, pattern, regex)
+
+
+def _row_action_button(driver, row, label):
+    """
+    Find a row's action button by VERTICAL POSITION, not DOM ancestry.
+
+    The action column is sticky, so Seller Center renders it as a separate
+    parallel table pinned to the right edge. The button is therefore never a
+    descendant of the row element on the left — searching inside the row finds
+    nothing no matter how far up you climb.
+
+    What is reliable is geometry: the button sits on the same horizontal band
+    as its row. So take the row's vertical extent and pick the button whose
+    centre falls inside it. This also disambiguates when several rows have
+    rendered their buttons, which happens because they do not disappear once
+    hovered.
+    """
+    return driver.execute_script(
+        """
+        var row = arguments[0], label = arguments[1], tolerance = arguments[2];
+        var r = row.getBoundingClientRect();
+        var rowMid = r.top + r.height / 2;
+
+        var best = null, bestDist = Infinity;
+        document.querySelectorAll('button, a, div[role="button"], span').forEach(
+            function(node) {
+                if ((node.textContent || '').trim() !== label) return;
+                if (node.offsetParent === null) return;             // not visible
+                if (node.querySelector('button, a, div[role="button"]')) return;  // wrapper
+                var b = node.getBoundingClientRect();
+                if (b.width === 0 || b.height === 0) return;
+                var dist = Math.abs((b.top + b.height / 2) - rowMid);
+                if (dist < bestDist) { bestDist = dist; best = node; }
+            });
+        return bestDist <= tolerance ? best : null;
+        """,
+        row, label, ROW_MATCH_TOLERANCE_PX,
     )
 
 
@@ -978,14 +1126,45 @@ def _handle_combine_dialog(driver, order_id, known_orders):
 
     Set TIKTOK_ALWAYS_COMBINE=1 to always combine regardless.
     """
-    dialog = find_visible(driver, "//*[normalize-space(text())='Combine orders']")
-    if dialog is None:
+    # Detect the dialog by its buttons rather than its title: "Combine orders"
+    # as a title is easy to confuse with other text, whereas these two labels
+    # exist only here.
+    anchor = find_by_text(driver, "Continue without combining")
+    if anchor is None:
         log.info("No Combine orders dialog (nothing to combine) — continuing.")
         return
 
-    ids = driver.execute_script(
-        "return (document.body.textContent || '').match(/\\b\\d{15,}\\b/g) || [];")
-    listed = [i for i in dict.fromkeys(ids)]
+    # Scope to the dialog before reading order ids: the page behind it is full
+    # of 15+ digit product ids, and scraping document.body picks all of them up,
+    # making every order look "unknown".
+    #
+    # Climb from the BUTTON until the ancestor actually contains order ids.
+    # Climbing from the title instead lands on a container that holds the
+    # buttons but not the parcel rows, which silently yields zero ids — and
+    # zero unknown ids reads as "safe to combine", the exact wrong answer.
+    dialog = driver.execute_script(
+        "return arguments[0].closest('.p-modal, [role=\"dialog\"]') "
+        "|| arguments[0].closest('.p-modal-wrapper');",
+        anchor,
+    )
+    if dialog is None:
+        screenshot(driver, f"combine_dialog_unparsed_{order_id}")
+        raise RuntimeError("Combine dialog found but its container could not be resolved")
+
+    ids = []
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        ids = order_ids_in(driver, dialog)
+        if ids:
+            break
+        time.sleep(1)
+
+    listed = list(dict.fromkeys(ids))
+    if not listed:
+        screenshot(driver, f"combine_dialog_no_orders_{order_id}")
+        raise RuntimeError("Combine dialog listed no order ids — refusing to "
+                           "decide whether combining is safe")
+
     unknown = [i for i in listed if i not in known_orders]
 
     always = os.environ.get("TIKTOK_ALWAYS_COMBINE", "").strip().lower() in (
@@ -1006,12 +1185,7 @@ def _handle_combine_dialog(driver, order_id, known_orders):
                      "combining.", len(listed))
         button_text = "Combine orders and continue"
 
-    btn = find_visible(
-        driver,
-        f"//*[self::button or self::div[@role='button'] or self::a]"
-        f"[contains(normalize-space(.), '{button_text}')]"
-        f"[not(.//*[contains(normalize-space(.), '{button_text}')])]",
-    )
+    btn = find_by_text(driver, button_text, scope=dialog)
     if btn is None:
         screenshot(driver, f"combine_dialog_{order_id}")
         raise RuntimeError(f"Combine dialog shown but '{button_text}' button not found")
@@ -1053,22 +1227,7 @@ def open_add_tracking(driver, order_id, known_orders=()):
     )
     time.sleep(1)
 
-    btn = driver.execute_script(
-        """
-        var row = arguments[0];
-        var nodes = row.querySelectorAll('button, a, div[role="button"], span');
-        for (var i = 0; i < nodes.length; i++) {
-            var t = (nodes[i].textContent || '').trim();
-            if (t === 'Add tracking info') return nodes[i];
-        }
-        for (var j = 0; j < nodes.length; j++) {
-            var s = (nodes[j].textContent || '').trim();
-            if (s.indexOf('Add tracking info') !== -1 && s.length < 40) return nodes[j];
-        }
-        return null;
-        """,
-        row,
-    )
+    btn = _row_action_button(driver, row, "Add tracking info")
     if btn is None:
         log.error("No 'Add tracking info' button in the row for %s "
                   "(order may not be in an addable state).", order_id)
@@ -1084,6 +1243,29 @@ def open_add_tracking(driver, order_id, known_orders=()):
     if not find_visible(driver, "//*[contains(normalize-space(text()), 'Add tracking info')]"):
         log.error("Did not reach the Add tracking info page for %s", order_id)
         screenshot(driver, f"no_tracking_page_{order_id}")
+        return False
+
+    # Wait for the parcel table to render before reading it. The heading and
+    # the page shell appear first; reading now returns only internal ids from
+    # the loading state and the order looks absent when it is simply not drawn
+    # yet.
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if driver.find_elements(By.XPATH, "//input[@placeholder='Enter tracking ID']"):
+            break
+        time.sleep(1)
+    else:
+        log.error("Tracking table never rendered for %s", order_id)
+        screenshot(driver, f"no_tracking_table_{order_id}")
+        return False
+
+    # Confirm we opened OUR order. Cheap, and the thing that makes the
+    # geometry-based button match safe to rely on.
+    page_ids = order_ids_in(driver)
+    if order_id not in page_ids:
+        log.error("Add tracking info page does not list order %s (found %s) — "
+                  "wrong row was opened, aborting.", order_id, sorted(set(page_ids))[:5])
+        screenshot(driver, f"wrong_order_page_{order_id}")
         return False
     return True
 
@@ -1122,14 +1304,17 @@ def _select_shipping_provider(driver, row, provider):
     except WebDriverException:
         pass
 
-    option = wait_for(
-        driver,
-        f"//*[@role='option' or contains(@class,'option') or self::li]"
-        f"[normalize-space(.)='{provider}']"
-        f"[not(.//*[normalize-space(.)='{provider}'])]",
-        20,
-        f"shipping provider option '{provider}'",
-    )
+    log.info("    picking provider option '%s' ...", provider)
+    deadline = time.time() + 20
+    option = None
+    while time.time() < deadline:
+        option = find_by_text(driver, provider)
+        if option is not None:
+            break
+        time.sleep(1)
+    if option is None:
+        screenshot(driver, "no_provider_option")
+        raise TimeoutError(f"Shipping provider option '{provider}' not found")
     js_click(driver, option)
     time.sleep(1)
     log.info("    provider set to %s", provider)
@@ -1151,10 +1336,7 @@ def _tracking_rows(driver):
             row = _row_container(driver, inp)
             if row is None:
                 continue
-            ids = driver.execute_script(
-                "return (arguments[0].textContent || '').match(/\\b\\d{15,}\\b/g) || [];",
-                row,
-            )
+            ids = order_ids_in(driver, row)
             rows.append((row, inp, ids))
         except WebDriverException:
             continue
@@ -1209,12 +1391,8 @@ def fill_tracking_page(driver, by_order, fallback):
 
 def submit_parcels(driver, dry_run):
     """Click "Submit N parcel(s)" and confirm. Returns (ok, verdict)."""
-    submit = find_visible(
-        driver,
-        "//*[self::button or self::div[@role='button']]"
-        "[contains(normalize-space(.), 'Submit') and contains(normalize-space(.), 'parcel')]"
-        "[not(.//*[contains(normalize-space(.), 'Submit')])]",
-    )
+    # "Submit 1 parcel" / "Submit 3 parcels" — the count varies, so match a pattern.
+    submit = find_by_text(driver, r"^Submit \d+ parcels?$", regex=True)
     if submit is None:
         screenshot(driver, "no_submit_button")
         return False, "Submit parcel button not found"
@@ -1230,11 +1408,7 @@ def submit_parcels(driver, dry_run):
     time.sleep(5)
 
     # Some flows raise a confirmation dialog before committing.
-    confirm = find_visible(
-        driver,
-        "//*[self::button or self::div[@role='button']]"
-        "[normalize-space(.)='Confirm' or normalize-space(.)='Submit' or normalize-space(.)='OK']",
-    )
+    confirm = find_by_text(driver, r"^(Confirm|Submit|OK)$", regex=True)
     if confirm is not None:
         log.info("  Confirmation dialog shown — confirming.")
         js_click(driver, confirm)
